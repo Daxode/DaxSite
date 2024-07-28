@@ -250,10 +250,6 @@ start_callback :: proc(e: js.Event) {
     data : ^OS = (^OS)(e.user_data);
     fmt.println("Clicked!", data)
     data.clicked += 0.1
-    idname := [256]u8{}
-    js.get_element_value_string("idname", idname[:])
-    str := strings.string_from_null_terminated_ptr(raw_data(idname[:]), len(idname));
-    fmt.println("idname:", str)
 }
 
 stop_callback :: proc(e: js.Event) {
