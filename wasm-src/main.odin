@@ -5,6 +5,7 @@ import js "vendor:wasm/js"
 import "core:fmt"
 import "base:runtime"
 import "core:strings"
+import "core:math"
 
 State :: struct {
     ctx: runtime.Context,
@@ -78,7 +79,7 @@ main :: proc() {
 
 	@fragment
 	fn fs_main() -> @location(0) vec4<f32> {
-		return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+		return vec4<f32>(0.3, 0.1, 0.5, 1.0);
 	}`
 
         state.module = wgpu.DeviceCreateShaderModule(state.device, &{
@@ -151,6 +152,10 @@ frame :: proc "c" (dt: f32) {
     command_encoder := wgpu.DeviceCreateCommandEncoder(state.device, nil)
     defer wgpu.CommandEncoderRelease(command_encoder)
 
+    from := wgpu.Color{0.05, 0.05, 0.1, 1.}
+    to := wgpu.Color{0.6, 0.2, 0.7, 1.}
+    result := math.lerp(wgpu.Color(state.os.clicked), from, to)
+
     render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
     command_encoder, &{
         colorAttachmentCount = 1,
@@ -158,7 +163,7 @@ frame :: proc "c" (dt: f32) {
             view       = frame,
             loadOp     = .Clear,
             storeOp    = .Store,
-            clearValue = { r = 0, g = state.os.clicked, b = 0, a = 1 },
+            clearValue = result,
         },
     },
     )
@@ -199,6 +204,18 @@ os_init :: proc(os: ^OS) {
     assert(js.add_window_event_listener(.Resize, nil, size_callback))
     assert(js.add_event_listener("start", .Click, os, start_callback))
     assert(js.add_event_listener("stop", .Click, os, stop_callback))
+
+    js.add_window_event_listener(.Pointer_Move, nil, proc(e: js.Event) {
+        if (0 in e.mouse.buttons)
+        {            
+            state.os.clicked += f64(e.mouse.movement.x)/200
+            state.os.clicked = clamp(state.os.clicked, 0, 1)
+        }
+    })
+
+    js.add_window_event_listener(.Key_Press, nil, proc(e: js.Event) {
+        // fmt.println("Key down", e.options)
+    })
 }
 
 // NOTE: frame loop is done by the runtime.js repeatedly calling `step`.
