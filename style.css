@@ -27,6 +27,19 @@
     border-radius: 10px;
     padding: 10px;
     user-select: text;
+    text-shadow: 3px 3px 3px black;
+}
+
+button {
+    background-color: #1e273735;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    margin: 10px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+    width: 200px;
 }
 
 canvas {
