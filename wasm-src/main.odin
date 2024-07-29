@@ -176,6 +176,7 @@ frame :: proc "c" (dt: f32) {
 
     from := wgpu.Color{0.05, 0.05, 0.1, 1.}
     to := wgpu.Color{0.6, 0.2, 0.7, 1.}
+    state.os.clickedSmoothed = math.lerp(state.os.clickedSmoothed, state.os.clicked, f64(2*dt))
 
     render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
     command_encoder, &{
@@ -184,7 +185,7 @@ frame :: proc "c" (dt: f32) {
             view       = frame,
             loadOp     = .Clear,
             storeOp    = .Store,
-            clearValue = math.lerp(wgpu.Color(state.os.clicked), from, to),
+            clearValue = math.lerp(wgpu.Color(state.os.clickedSmoothed), from, to),
         },
     },
     )
@@ -200,7 +201,7 @@ frame :: proc "c" (dt: f32) {
 
 
     verts := []Vertex{
-        {2*{f32(state.os.clicked-0.5), 0.5, 0.0}},
+        {2*{f32(state.os.clickedSmoothed-0.5), 0.5, 0.0}},
         {2*{0.5, -0.5, 0.0}},
         {2*{-0.5, -0.5, 0.0}},
     }
@@ -223,6 +224,7 @@ finish :: proc() {
 OS :: struct {
     initialized: bool,
     clicked: f64,
+    clickedSmoothed: f64,
     touchHeld: bool,
 }
 
