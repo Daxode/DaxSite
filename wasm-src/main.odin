@@ -235,9 +235,6 @@ os_init :: proc(os: ^OS) {
     assert(js.add_event_listener("start", .Click, os, start_callback))
     assert(js.add_event_listener("stop", .Click, os, stop_callback))
 
-    js.add_window_event_listener(.Mouse_Down, nil, proc(e: js.Event) {
-        state.os.touchHeld = true
-    })
     js.add_window_event_listener(.Touch_Start, nil, proc(e: js.Event) {
         state.os.touchHeld = true
     })
@@ -245,12 +242,9 @@ os_init :: proc(os: ^OS) {
     js.add_window_event_listener(.Touch_Cancel, nil, proc(e: js.Event) {
         state.os.touchHeld = false
     })
-    js.add_window_event_listener(.Mouse_Up, nil, proc(e: js.Event) {
-        state.os.touchHeld = false
-    })
 
     js.add_window_event_listener(.Pointer_Move, nil, proc(e: js.Event) {
-        if (state.os.touchHeld)
+        if (0 in e.mouse.buttons || state.os.touchHeld)
         {
             state.os.clicked += f64(e.mouse.movement.x)/200
             state.os.clicked = clamp(state.os.clicked, 0, 1)
