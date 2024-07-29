@@ -241,10 +241,10 @@ os_init :: proc(os: ^OS) {
     js.add_window_event_listener(.Touch_Start, nil, proc(e: js.Event) {
         state.os.touchHeld = true
     })
-    js.add_window_event_listener(.Touch_End, nil, proc(e: js.Event) {
+
+    js.add_window_event_listener(.Touch_Cancel, nil, proc(e: js.Event) {
         state.os.touchHeld = false
     })
-
     js.add_window_event_listener(.Mouse_Up, nil, proc(e: js.Event) {
         state.os.touchHeld = false
     })
