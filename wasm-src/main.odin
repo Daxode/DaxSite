@@ -20,6 +20,12 @@ State :: struct {
     module:          wgpu.ShaderModule,
     pipeline_layout: wgpu.PipelineLayout,
     pipeline:        wgpu.RenderPipeline,
+
+    triangleVertexBuffer: wgpu.Buffer,
+}
+
+Vertex :: struct {
+    worldPos: [3]f32,
 }
 
 @(private="file")
@@ -69,34 +75,51 @@ main :: proc() {
 
         state.queue = wgpu.DeviceGetQueue(state.device)
 
-        shader :: `
-	@vertex
-	fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
-		let x = f32(i32(in_vertex_index) - 1);
-		let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
-		return vec4<f32>(x, y, 0.0, 1.0);
-	}
-
-	@fragment
-	fn fs_main() -> @location(0) vec4<f32> {
-		return vec4<f32>(0.3, 0.1, 0.5, 1.0);
-	}`
+        shader :: #load("triangle.wgsl")
 
         state.module = wgpu.DeviceCreateShaderModule(state.device, &{
             nextInChain = &wgpu.ShaderModuleWGSLDescriptor{
                 sType = .ShaderModuleWGSLDescriptor,
-                code  = shader,
+                code  = strings.unsafe_string_to_cstring(strings.clone_from_bytes(shader)),
             },
         })
 
-        state.pipeline_layout = wgpu.DeviceCreatePipelineLayout(state.device, &{})
-        state.pipeline = wgpu.DeviceCreateRenderPipeline(state.device, &{
+        state.triangleVertexBuffer = wgpu.DeviceCreateBuffer(device, &{
+            label            = "Vertex Buffer",
+            usage            = {.Vertex, .CopyDst},
+            size             = 3 * size_of(Vertex),
+            mappedAtCreation = true,
+        })
+        destVerts := wgpu.BufferGetMappedRangeSlice(state.triangleVertexBuffer, 0, Vertex, 3)
+        verts := []Vertex{
+            {2*{0.0, 0.5, 0.0}},
+            {2*{0.5, -0.5, 0.0}},
+            {2*{-0.5, -0.5, 0.0}},
+        }
+        copy(destVerts, verts)
+        wgpu.BufferUnmap(state.triangleVertexBuffer)
+        
+        vertexBuffer := wgpu.VertexBufferLayout {
+            arrayStride = 3 * size_of(f32),
+            stepMode = .Vertex,
+            attributes = &wgpu.VertexAttribute{
+                format = .Float32x3,
+                offset = 0,
+                shaderLocation = 0,
+            },
+            attributeCount = 1,
+        }
+        
+        state.pipeline_layout = wgpu.DeviceCreatePipelineLayout(state.device, &wgpu.PipelineLayoutDescriptor{})
+        state.pipeline = wgpu.DeviceCreateRenderPipeline(state.device, &wgpu.RenderPipelineDescriptor{
             layout = state.pipeline_layout,
-            vertex = {
+            vertex = wgpu.VertexState {
                 module     = state.module,
                 entryPoint = "vs_main",
+                bufferCount = 1,
+                buffers    = &vertexBuffer,
             },
-            fragment = &{
+            fragment = &wgpu.FragmentState{
                 module      = state.module,
                 entryPoint  = "fs_main",
                 targetCount = 1,
@@ -105,9 +128,8 @@ main :: proc() {
                     writeMask = wgpu.ColorWriteMaskFlags_All,
                 },
             },
-            primitive = {
+            primitive = wgpu.PrimitiveState{
                 topology = .TriangleList,
-
             },
             multisample = {
                 count = 1,
@@ -154,7 +176,6 @@ frame :: proc "c" (dt: f32) {
 
     from := wgpu.Color{0.05, 0.05, 0.1, 1.}
     to := wgpu.Color{0.6, 0.2, 0.7, 1.}
-    result := math.lerp(wgpu.Color(state.os.clicked), from, to)
 
     render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
     command_encoder, &{
@@ -163,13 +184,14 @@ frame :: proc "c" (dt: f32) {
             view       = frame,
             loadOp     = .Clear,
             storeOp    = .Store,
-            clearValue = result,
+            clearValue = math.lerp(wgpu.Color(state.os.clicked), from, to),
         },
     },
     )
     defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
 
     wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, state.pipeline)
+    wgpu.RenderPassEncoderSetVertexBuffer(render_pass_encoder, 0, state.triangleVertexBuffer, 0, 9 * size_of(f32))
     wgpu.RenderPassEncoderDraw(render_pass_encoder, vertexCount=3, instanceCount=1, firstVertex=0, firstInstance=0)
     wgpu.RenderPassEncoderEnd(render_pass_encoder)
 
