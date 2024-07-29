@@ -1671,6 +1671,16 @@ function odinSetupDefaultImports(wasmMemoryInterface, consoleElement, memory) {
 				}
 				return 0;
 			},
+			get_current_url: (buf_ptr, buf_len) => {
+				let str = window.location.hash;
+				if (buf_len > 0 && buf_ptr) {
+					let n = Math.min(buf_len, str.length);
+					str = str.substring(0, n);
+					wasmMemoryInterface.loadBytes(buf_ptr, buf_len).set(new TextEncoder().encode(str));
+					return n;
+				}
+				return 0;
+			},
 			get_element_min_max: (ptr_array2_f64, id_ptr, id_len) => {
 				let id = wasmMemoryInterface.loadString(id_ptr, id_len);
 				let element = getElement(id);
@@ -1695,7 +1705,17 @@ function odinSetupDefaultImports(wasmMemoryInterface, consoleElement, memory) {
 					element.value = value;
 				}
 			},
-
+			set_element_text_string: (id_ptr, id_len, value_ptr, value_len) => {
+				let id = wasmMemoryInterface.loadString(id_ptr, id_len);
+				let value = wasmMemoryInterface.loadString(value_ptr, value_len);
+				let element = getElement(id);
+				if (element) {
+					// while (element.hasChildNodes())
+					// 	element.removeChild(element.firstChild);
+					// element.appendChild(document.createTextNode(value));
+					element.innerText = element.textContent = value;
+				}
+			},
 
 			get_bounding_client_rect: (rect_ptr, id_ptr, id_len) => {
 				let id = wasmMemoryInterface.loadString(id_ptr, id_len);

@@ -6,6 +6,7 @@ import "core:fmt"
 import "base:runtime"
 import "core:strings"
 import "core:math"
+import "js_ext"
 
 State :: struct {
     ctx: runtime.Context,
@@ -250,11 +251,19 @@ os_init :: proc(os: ^OS) {
         {
             state.os.clicked += f64(e.mouse.movement.x)/200
             state.os.clicked = clamp(state.os.clicked, 0, 1)
+            js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.os.clicked))
         }
     })
 
     js.add_window_event_listener(.Key_Press, nil, proc(e: js.Event) {
         // fmt.println("Key down", e.options)
+    })
+
+
+    js.add_window_event_listener(.HashChange, nil, proc(e: js.Event) {
+        buf := [256]u8{};
+        val := js_ext.get_current_url(buf[:])
+        fmt.println("Current URL:", val)
     })
 }
 
@@ -307,9 +316,12 @@ start_callback :: proc(e: js.Event) {
     data : ^OS = (^OS)(e.user_data);
     fmt.println("Clicked!", data)
     data.clicked += 0.1
+    data.clicked = clamp(data.clicked, 0, 1)
+    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.os.clicked))
 }
 
 stop_callback :: proc(e: js.Event) {
     data : ^OS = (^OS)(e.user_data);
     data.clicked = 0
+    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.os.clicked))
 }
