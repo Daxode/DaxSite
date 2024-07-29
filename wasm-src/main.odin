@@ -198,6 +198,13 @@ frame :: proc "c" (dt: f32) {
     command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
     defer wgpu.CommandBufferRelease(command_buffer)
 
+
+    verts := []Vertex{
+        {2*{f32(state.os.clicked-0.5), 0.5, 0.0}},
+        {2*{0.5, -0.5, 0.0}},
+        {2*{-0.5, -0.5, 0.0}},
+    }
+    wgpu.QueueWriteBuffer(state.queue, state.triangleVertexBuffer, 0, raw_data(verts), len(verts)*size_of(Vertex))
     wgpu.QueueSubmit(state.queue, { command_buffer })
     wgpu.SurfacePresent(state.surface)
 }
