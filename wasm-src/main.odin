@@ -243,7 +243,7 @@ os_init :: proc(os: ^OS) {
         state.os.touchHeld = false
     })
 
-    js.add_window_event_listener(.Pointer_Move, nil, proc(e: js.Event) {
+    js.add_window_event_listener(.Touch_Move, nil, proc(e: js.Event) {
         if (0 in e.mouse.buttons || state.os.touchHeld)
         {
             state.os.clicked += f64(e.mouse.movement.x)/200
