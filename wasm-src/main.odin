@@ -7,6 +7,12 @@ import "base:runtime"
 import "core:strings"
 import "core:math"
 import "js_ext"
+import "renderer"
+import "core:math/linalg"
+
+DefaultMesh :: renderer.Mesh(renderer.Vertex, renderer.UniformData);
+DefaultMeshGroup :: renderer.MeshGroup(renderer.Vertex, renderer.UniformData);
+DefaultMaterial :: renderer.MaterialTemplate(renderer.Vertex, renderer.UniformData);
 
 State :: struct {
     ctx: runtime.Context,
@@ -18,15 +24,10 @@ State :: struct {
     device:          wgpu.Device,
     config:          wgpu.SurfaceConfiguration,
     queue:           wgpu.Queue,
-    module:          wgpu.ShaderModule,
-    pipeline_layout: wgpu.PipelineLayout,
-    pipeline:        wgpu.RenderPipeline,
 
-    triangleVertexBuffer: wgpu.Buffer,
-}
-
-Vertex :: struct {
-    worldPos: [3]f32,
+    meshes:          [dynamic]DefaultMesh,
+    material:        [dynamic]DefaultMaterial,
+    materialToMeshes: map[^DefaultMaterial]DefaultMeshGroup,
 }
 
 @(private="file")
@@ -56,90 +57,96 @@ main :: proc() {
 
     on_device :: proc "c" (status: wgpu.RequestDeviceStatus, device: wgpu.Device, message: cstring, userdata: rawptr) {
         context = state.ctx
+        
+        // Setup device
         if status != .Success || device == nil {
             fmt.panicf("request device failure: [%v] %s", status, message)
         }
         state.device = device
+        found_limits := false
+        limits: wgpu.SupportedLimits
+        if limits, found_limits = wgpu.DeviceGetLimits(device); !found_limits {
+            fmt.panicf("failed to get device limits")
+        }
 
-        width, height := os_get_render_bounds(&state.os)
-
+        // Setup surface
         state.config = wgpu.SurfaceConfiguration {
             device      = state.device,
             usage       = { .RenderAttachment },
             format      = .BGRA8Unorm,
-            width       = width,
-            height      = height,
             presentMode = .Fifo,
             alphaMode   = .Opaque,
         }
-        wgpu.SurfaceConfigure(state.surface, &state.config)
+        resize();
 
+        // Setup queue
         state.queue = wgpu.DeviceGetQueue(state.device)
 
-        shader :: #load("triangle.wgsl")
-
-        state.module = wgpu.DeviceCreateShaderModule(state.device, &{
-            nextInChain = &wgpu.ShaderModuleWGSLDescriptor{
-                sType = .ShaderModuleWGSLDescriptor,
-                code  = strings.unsafe_string_to_cstring(strings.clone_from_bytes(shader)),
-            },
-        })
-
-        state.triangleVertexBuffer = wgpu.DeviceCreateBuffer(device, &{
-            label            = "Vertex Buffer",
-            usage            = {.Vertex, .CopyDst},
-            size             = 3 * size_of(Vertex),
-            mappedAtCreation = true,
-        })
-        destVerts := wgpu.BufferGetMappedRangeSlice(state.triangleVertexBuffer, 0, Vertex, 3)
-        verts := []Vertex{
-            {2*{0.0, 0.5, 0.0}},
-            {2*{0.5, -0.5, 0.0}},
-            {2*{-0.5, -0.5, 0.0}},
-        }
-        copy(destVerts, verts)
-        wgpu.BufferUnmap(state.triangleVertexBuffer)
+        // Setup mesh and material arrays
+        state.meshes = make([dynamic]DefaultMesh)
+        state.material = make([dynamic]DefaultMaterial)
+        state.materialToMeshes = make(map[^DefaultMaterial]DefaultMeshGroup)
         
-        vertexBuffer := wgpu.VertexBufferLayout {
-            arrayStride = 3 * size_of(f32),
-            stepMode = .Vertex,
-            attributes = &wgpu.VertexAttribute{
-                format = .Float32x3,
-                offset = 0,
-                shaderLocation = 0,
-            },
-            attributeCount = 1,
+        // Load meshes and materials
+        append(&state.material, renderer.createDefaultMaterialTemplate(state.device));
+        append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
+            {{ 0.0, -0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+            {{ 0.5, -0.5, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {{ 0.5,  0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+        }[:], [dynamic]u32{0, 1, 2}[:], &state.material[len(state.material)-1]));
+        append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
+            {0.2*{-1.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+            {0.2*{ 1.0, -1.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {0.2*{ 1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+            {0.2*{-1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+        }[:], [dynamic]u32{0, 1, 2, 0, 2, 3}[:], &state.material[len(state.material)-1]));
+
+
+        // Group meshes by material
+        for &mesh in state.meshes {
+            if !(mesh.material in state.materialToMeshes) {
+                state.materialToMeshes[mesh.material] = {make([dynamic]^DefaultMesh), nil, nil, 0}
+            }
+            group := &state.materialToMeshes[mesh.material];
+            append(&group.meshes, &mesh);
         }
-        
-        state.pipeline_layout = wgpu.DeviceCreatePipelineLayout(state.device, &wgpu.PipelineLayoutDescriptor{})
-        state.pipeline = wgpu.DeviceCreateRenderPipeline(state.device, &wgpu.RenderPipelineDescriptor{
-            layout = state.pipeline_layout,
-            vertex = wgpu.VertexState {
-                module     = state.module,
-                entryPoint = "vs_main",
-                bufferCount = 1,
-                buffers    = &vertexBuffer,
-            },
-            fragment = &wgpu.FragmentState{
-                module      = state.module,
-                entryPoint  = "fs_main",
-                targetCount = 1,
-                targets     = &wgpu.ColorTargetState{
-                    format    = .BGRA8Unorm,
-                    writeMask = wgpu.ColorWriteMaskFlags_All,
+
+        for material, &group in state.materialToMeshes {
+            fmt.println("Creating bind group for material", material)
+            fmt.println("Group has", len(group.meshes), "meshes")
+            group.uniformStride = ceil_to_next_multiple(size_of(renderer.UniformData), limits.limits.minUniformBufferOffsetAlignment)
+            group.uniformBuffer = wgpu.DeviceCreateBuffer(state.device, &wgpu.BufferDescriptor{
+                label = "Uniform Buffer",
+                size = u64(group.uniformStride * u32(len(group.meshes))),
+                usage = {.Uniform, .CopyDst},
+                mappedAtCreation = false
+            });
+            
+            group.bindGroup = wgpu.DeviceCreateBindGroup(state.device, &wgpu.BindGroupDescriptor{
+                label = "Default Material Bind Group",
+                layout = material.bindGroupLayout,
+                entries = &wgpu.BindGroupEntry{
+                    binding = 0,
+                    size = u64(group.uniformStride),
+                    buffer = group.uniformBuffer,
                 },
-            },
-            primitive = wgpu.PrimitiveState{
-                topology = .TriangleList,
-            },
-            multisample = {
-                count = 1,
-                mask  = 0xFFFFFFFF,
-            },
-        })
+                entryCount = 1,
+            });
+
+            for &mesh, i in group.meshes {                
+                wgpu.QueueWriteBuffer(state.queue, group.uniformBuffer, u64(u32(i)*group.uniformStride), &renderer.UniformData{
+                    0.0, 
+                    {},
+                }, size_of(renderer.UniformData))
+            }
+        }
 
         os_run(&state.os)
     }
+}
+
+ceil_to_next_multiple :: proc(value, multiple: u32) -> u32 {
+    return (value + multiple - 1) / multiple * multiple
 }
 
 resize :: proc "c" () {
@@ -154,18 +161,18 @@ frame :: proc "c" (dt: f32) {
 
     surface_texture := wgpu.SurfaceGetCurrentTexture(state.surface)
     switch surface_texture.status {
-    case .Success:
-    // All good, could check for `surface_texture.suboptimal` here.
-    case .Timeout, .Outdated, .Lost:
-    // Skip this frame, and re-configure surface.
-        if surface_texture.texture != nil {
-            wgpu.TextureRelease(surface_texture.texture)
-        }
-        resize()
-        return
-    case .OutOfMemory, .DeviceLost:
-    // Fatal error
-        fmt.panicf("[triangle] get_current_texture status=%v", surface_texture.status)
+        case .Success:
+            // All good, could check for `surface_texture.suboptimal` here.
+        case .Timeout, .Outdated, .Lost:
+            // Skip this frame, and re-configure surface.
+            if surface_texture.texture != nil {
+                wgpu.TextureRelease(surface_texture.texture)
+            }
+            resize()
+            return
+        case .OutOfMemory, .DeviceLost:
+            // Fatal error
+            fmt.panicf("[triangle] get_current_texture status=%v", surface_texture.status)
     }
     defer wgpu.TextureRelease(surface_texture.texture)
 
@@ -191,30 +198,56 @@ frame :: proc "c" (dt: f32) {
     },
     )
     defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
-
-    wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, state.pipeline)
-    wgpu.RenderPassEncoderSetVertexBuffer(render_pass_encoder, 0, state.triangleVertexBuffer, 0, 9 * size_of(f32))
-    wgpu.RenderPassEncoderDraw(render_pass_encoder, vertexCount=3, instanceCount=1, firstVertex=0, firstInstance=0)
     wgpu.RenderPassEncoderEnd(render_pass_encoder)
+
+
+    for material, meshGroup in state.materialToMeshes {
+        render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
+        command_encoder, &{
+            colorAttachmentCount = 1,
+            colorAttachments     = &wgpu.RenderPassColorAttachment{
+                view       = frame,
+                loadOp     = .Load,
+                storeOp    = .Store,
+                clearValue = wgpu.Color{0.0, 0.0, 0.0, 1.0},
+            },
+        })
+        defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
+
+        for &mesh, i in meshGroup.meshes {
+            // fmt.println("Drawing mesh", mesh, "with material", mesh.material)
+            wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, material.pipeline)
+            wgpu.RenderPassEncoderSetBindGroup(render_pass_encoder, 0, meshGroup.bindGroup, []u32{u32(i)*meshGroup.uniformStride});
+            wgpu.RenderPassEncoderSetVertexBuffer(render_pass_encoder, 0, mesh.vertBuffer, 0, u64(len(mesh.vertices)*size_of(renderer.Vertex)))
+            wgpu.RenderPassEncoderSetIndexBuffer(render_pass_encoder, mesh.indexBuffer, wgpu.IndexFormat.Uint32, 0, u64(len(mesh.indices)*size_of(u32)))
+            wgpu.RenderPassEncoderDrawIndexed(render_pass_encoder, u32(len(mesh.indices)), 1, 0, 0, 0)
+            wgpu.QueueWriteBuffer(state.queue, meshGroup.uniformBuffer, u64(u32(i)*meshGroup.uniformStride), &renderer.UniformData{
+                f32(state.os.clickedSmoothed),
+                linalg.matrix4_from_trs(
+                    linalg.Vector3f32{0.0,f32(state.os.clickedSmoothed)-0.5,0.0}, 
+                    linalg.quaternion_from_euler_angle_z(f32(state.os.clickedSmoothed)*6.28318530718), 
+                    linalg.Vector3f32(1)
+                ),
+            }, size_of(renderer.UniformData))
+        }
+        wgpu.RenderPassEncoderEnd(render_pass_encoder)
+    }
+    fmt.println("Finished drawing meshes")
+
 
     command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
     defer wgpu.CommandBufferRelease(command_buffer)
-
-
-    verts := []Vertex{
-        {2*{f32(state.os.clickedSmoothed-0.5), 0.5, 0.0}},
-        {2*{0.5, -0.5, 0.0}},
-        {2*{-0.5, -0.5, 0.0}},
-    }
-    wgpu.QueueWriteBuffer(state.queue, state.triangleVertexBuffer, 0, raw_data(verts), len(verts)*size_of(Vertex))
     wgpu.QueueSubmit(state.queue, { command_buffer })
     wgpu.SurfacePresent(state.surface)
 }
 
 finish :: proc() {
-    wgpu.RenderPipelineRelease(state.pipeline)
-    wgpu.PipelineLayoutRelease(state.pipeline_layout)
-    wgpu.ShaderModuleRelease(state.module)
+    for &mesh in state.meshes {
+        renderer.releaseMesh(&mesh)
+    }
+    for &material in state.material {
+        renderer.releaseMaterialTemplate(&material)
+    }
     wgpu.QueueRelease(state.queue)
     wgpu.DeviceRelease(state.device)
     wgpu.AdapterRelease(state.adapter)

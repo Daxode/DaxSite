@@ -2439,8 +2439,14 @@ class WebGPUInterface {
 				}
 
 				dynamicOffsetCount = this.unwrapBigInt(dynamicOffsetCount);
-				const dynamicOffsets = this.array(dynamicOffsetCount, dynamicOffsetsPtr, this.mem.loadU32, 4);	
-
+				const dynamicOffsets = [];
+				if (dynamicOffsetCount > 0) {
+					this.assert(dynamicOffsetsPtr != 0);
+					for (let i = 0; i < dynamicOffsetCount; i += 1) {
+						dynamicOffsets.push(this.mem.loadU32(dynamicOffsetsPtr));
+						dynamicOffsetsPtr += 4;
+					}
+				}
 				renderPassEncoder.setBindGroup(groupIndex, group, dynamicOffsets);
 			},
 
