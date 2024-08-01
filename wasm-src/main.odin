@@ -89,30 +89,6 @@ main :: proc() {
         
         // Setup queue
         state.queue = wgpu.DeviceGetQueue(state.device)
-        
-        // Create Depth Texture
-        depthFormat := wgpu.TextureFormat.Depth24Plus
-        state.depthTexture = wgpu.DeviceCreateTexture(state.device, &wgpu.TextureDescriptor{
-            label = "Depth Texture",
-            size = {state.config.width, state.config.height, 1},
-            mipLevelCount = 1,
-            sampleCount = 1,
-            dimension = ._2D,
-            format = .Depth24Plus,
-            usage = {.RenderAttachment},
-            viewFormatCount = 1,
-            viewFormats = &depthFormat,
-        });
-        state.depthView = wgpu.TextureCreateView(state.depthTexture, &wgpu.TextureViewDescriptor{
-            label = "Depth Texture View",
-            format = .Depth24Plus,
-            dimension = ._2D,
-            aspect = .DepthOnly,
-            baseMipLevel = 0,
-            mipLevelCount = 1,
-            baseArrayLayer = 0,
-            arrayLayerCount = 1,
-        });
 
         // Setup mesh and material arrays
         state.meshes = make([dynamic]DefaultMesh)
@@ -217,6 +193,36 @@ resize :: proc "c" () {
 
     state.config.width, state.config.height = os_get_render_bounds(&state.os)
     wgpu.SurfaceConfigure(state.surface, &state.config)
+    if state.depthTexture != nil {
+        // Destroy the old depth texture
+        wgpu.TextureViewRelease(state.depthView)
+        wgpu.TextureDestroy(state.depthTexture)
+        wgpu.TextureRelease(state.depthTexture)
+    }
+
+    // Create Depth Texture
+    depthFormat := wgpu.TextureFormat.Depth24Plus
+    state.depthTexture = wgpu.DeviceCreateTexture(state.device, &wgpu.TextureDescriptor{
+        label = "Depth Texture",
+        size = {state.config.width, state.config.height, 1},
+        mipLevelCount = 1,
+        sampleCount = 1,
+        dimension = ._2D,
+        format = .Depth24Plus,
+        usage = {.RenderAttachment},
+        viewFormatCount = 1,
+        viewFormats = &depthFormat,
+    });
+    state.depthView = wgpu.TextureCreateView(state.depthTexture, &wgpu.TextureViewDescriptor{
+        label = "Depth Texture View",
+        format = .Depth24Plus,
+        dimension = ._2D,
+        aspect = .DepthOnly,
+        baseMipLevel = 0,
+        mipLevelCount = 1,
+        baseArrayLayer = 0,
+        arrayLayerCount = 1,
+    });
 }
 
 frame :: proc "c" (dt: f32) {
