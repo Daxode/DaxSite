@@ -6,6 +6,7 @@ import "core:fmt"
 import "base:runtime"
 import "core:strings"
 import "core:math"
+import "core:strconv"
 import "js_ext"
 import "renderer"
 import "core:math/linalg"
@@ -57,7 +58,7 @@ main :: proc() {
 
     on_device :: proc "c" (status: wgpu.RequestDeviceStatus, device: wgpu.Device, message: cstring, userdata: rawptr) {
         context = state.ctx
-        
+
         // Setup device
         if status != .Success || device == nil {
             fmt.panicf("request device failure: [%v] %s", status, message)
@@ -86,20 +87,50 @@ main :: proc() {
         state.meshes = make([dynamic]DefaultMesh)
         state.material = make([dynamic]DefaultMaterial)
         state.materialToMeshes = make(map[^DefaultMaterial]DefaultMeshGroup)
-        
+
         // Load meshes and materials
         append(&state.material, renderer.createDefaultMaterialTemplate(state.device));
+        // append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
+        //     {{ 0.0, -0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+        //     {{ 0.5, -0.5, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+        //     {{ 0.5,  0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+        // }[:], [dynamic]u32{0, 1, 2}[:], &state.material[len(state.material)-1]));
+        // append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
+        //     {0.2*{-1.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+        //     {0.2*{ 1.0, -1.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+        //     {0.2*{ 1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+        //     {0.2*{-1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
+        // }[:], [dynamic]u32{0, 1, 2, 0, 2, 3}[:], &state.material[len(state.material)-1]));
+        
+        //Create plane under cube
         append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
-            {{ 0.0, -0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-            {{ 0.5, -0.5, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {{ 0.5,  0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-        }[:], [dynamic]u32{0, 1, 2}[:], &state.material[len(state.material)-1]));
+            {{-1.0*5, -0.5, -1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {{ 1.0*5, -0.5, -1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {{ 1.0*5, -0.5,  1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {{-1.0*5, -0.5,  1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+        }[:], [dynamic]u32 {
+            0, 1, 2, 0, 2, 3
+        }[:], &state.material[len(state.material)-1]));
+
+        // Create Cube
         append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
-            {0.2*{-1.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-            {0.2*{ 1.0, -1.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {0.2*{ 1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-            {0.2*{-1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-        }[:], [dynamic]u32{0, 1, 2, 0, 2, 3}[:], &state.material[len(state.material)-1]));
+            {1*{-1.0, -1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {1*{ 1.0, -1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {1*{ 1.0,  1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {1*{-1.0,  1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {1*{-1.0, -1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {1*{ 1.0, -1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {1*{ 1.0,  1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
+            {1*{-1.0,  1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}}
+        }[:], [dynamic]u32 {
+            0, 1, 2, 0, 2, 3, // front
+            1, 5, 6, 1, 6, 2, // right
+            5, 4, 7, 5, 7, 6, // back
+            4, 0, 3, 4, 3, 7, // left
+            3, 2, 6, 3, 6, 7, // top
+            0, 4, 5, 0, 5, 1  // bottom
+        }[:], &state.material[len(state.material)-1]));
+
 
 
         // Group meshes by material
@@ -121,7 +152,7 @@ main :: proc() {
                 usage = {.Uniform, .CopyDst},
                 mappedAtCreation = false
             });
-            
+
             group.bindGroup = wgpu.DeviceCreateBindGroup(state.device, &wgpu.BindGroupDescriptor{
                 label = "Default Material Bind Group",
                 layout = material.bindGroupLayout,
@@ -133,9 +164,9 @@ main :: proc() {
                 entryCount = 1,
             });
 
-            for &mesh, i in group.meshes {                
+            for &mesh, i in group.meshes {
                 wgpu.QueueWriteBuffer(state.queue, group.uniformBuffer, u64(u32(i)*group.uniformStride), &renderer.UniformData{
-                    0.0, 
+                    0.0,
                     {},
                 }, size_of(renderer.UniformData))
             }
@@ -215,6 +246,19 @@ frame :: proc "c" (dt: f32) {
         defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
 
         for &mesh, i in meshGroup.meshes {
+            projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(state.config.width)/f32(state.config.height), 0.0000000001, 100, false)
+            view := linalg.matrix4_look_at(linalg.Vector3f32{
+                state.os.cam_pos.x, state.os.cam_pos.y, state.os.cam_pos.z
+                // 0, 0, 0
+            }, linalg.Vector3f32{
+                // state.os.cam_pos.x, state.os.cam_pos.y, state.os.cam_pos.z,
+                math.cos(f32(state.os.clickedSmoothed)*6.28)*20,
+                0,
+                math.sin(f32(state.os.clickedSmoothed)*6.28)*20
+            }, linalg.Vector3f32{
+                0.0, 1.0, 0.0
+            })
+
             // fmt.println("Drawing mesh", mesh, "with material", mesh.material)
             wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, material.pipeline)
             wgpu.RenderPassEncoderSetBindGroup(render_pass_encoder, 0, meshGroup.bindGroup, []u32{u32(i)*meshGroup.uniformStride});
@@ -223,16 +267,17 @@ frame :: proc "c" (dt: f32) {
             wgpu.RenderPassEncoderDrawIndexed(render_pass_encoder, u32(len(mesh.indices)), 1, 0, 0, 0)
             wgpu.QueueWriteBuffer(state.queue, meshGroup.uniformBuffer, u64(u32(i)*meshGroup.uniformStride), &renderer.UniformData{
                 f32(state.os.clickedSmoothed),
-                linalg.matrix4_from_trs(
-                    linalg.Vector3f32{0.0,f32(state.os.clickedSmoothed)-0.5,0.0}, 
-                    linalg.quaternion_from_euler_angle_z(f32(state.os.clickedSmoothed)*6.28318530718), 
-                    linalg.Vector3f32(1)
+                projection * view * linalg.matrix4_from_trs(
+                    linalg.Vector3f32{state.os.pos.x, state.os.pos.y, state.os.pos.z},
+                    linalg.quaternion_from_euler_angle_y(f32(state.os.timer)*f32(i)), //
+                    linalg.Vector3f32(0.4)
                 ),
             }, size_of(renderer.UniformData))
         }
         wgpu.RenderPassEncoderEnd(render_pass_encoder)
     }
     fmt.println("Finished drawing meshes")
+    state.os.timer += f64(dt)
 
 
     command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
@@ -260,6 +305,11 @@ OS :: struct {
     clicked: f64,
     clickedSmoothed: f64,
     touchHeld: bool,
+
+    timer: f64,
+
+    pos: [3]f32,
+    cam_pos: [3]f32
 }
 
 @(private="file")
@@ -290,6 +340,36 @@ os_init :: proc(os: ^OS) {
 
     js.add_window_event_listener(.Key_Press, nil, proc(e: js.Event) {
         // fmt.println("Key down", e.options)
+    })
+
+    js.add_custom_event_listener("pos-x", "input", nil, proc(e: js.Event) {
+        data : [256]byte;
+        state.os.pos.x = f32(strconv.atof(js.get_element_value_string("pos-x", data[:])))
+    })
+
+    js.add_custom_event_listener("pos-y", "input", nil, proc(e: js.Event) {
+        data : [256]byte;
+        state.os.pos.y = f32(strconv.atof(js.get_element_value_string("pos-y", data[:])))
+    })
+
+    js.add_custom_event_listener("pos-z", "input", nil, proc(e: js.Event) {
+        data : [256]byte;
+        state.os.pos.z = f32(strconv.atof(js.get_element_value_string("pos-z", data[:])))
+    })
+
+    js.add_custom_event_listener("cam-x", "input", nil, proc(e: js.Event) {
+        data : [256]byte;
+        state.os.cam_pos.x = f32(strconv.atof(js.get_element_value_string("cam-x", data[:])))
+    })
+
+    js.add_custom_event_listener("cam-y", "input", nil, proc(e: js.Event) {
+        data : [256]byte;
+        state.os.cam_pos.y = f32(strconv.atof(js.get_element_value_string("cam-y", data[:])))
+    })
+
+    js.add_custom_event_listener("cam-z", "input", nil, proc(e: js.Event) {
+        data : [256]byte;
+        state.os.cam_pos.z = f32(strconv.atof(js.get_element_value_string("cam-z", data[:])))
     })
 
 

@@ -86,6 +86,8 @@ createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert,
         },
         primitive = wgpu.PrimitiveState{
             topology = .TriangleList,
+            cullMode = .Back,
+            frontFace = .CCW,
         },
         multisample = {
             count = 1,

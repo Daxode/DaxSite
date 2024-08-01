@@ -17,7 +17,8 @@ fn vs_main(in: VertexInput) -> VertexOutput
     var out: VertexOutput;
     let fullTransform = uniformData.objectTransform;
     out.clip_pos = vec4<f32>((fullTransform*vec4f(in.worldPos, 1)).xyz, 1.0);
-    out.color = (fullTransform*vec4f(in.worldPos, 1)).xyz;
+    out.clip_pos.z = out.clip_pos.z * 0.0001 + 0.5;
+    out.color = (vec4f(in.worldPos, 1)).xyz;
     return out;
 }
 
