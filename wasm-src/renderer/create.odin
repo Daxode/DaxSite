@@ -93,6 +93,13 @@ createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert,
             count = 1,
             mask  = 0xFFFFFFFF,
         },
+        depthStencil = &wgpu.DepthStencilState{
+            format = .Depth24Plus,
+            depthWriteEnabled = true,
+            depthCompare = .Less,
+            stencilReadMask = 0,
+            stencilWriteMask = 0,
+        },
     })
     
     return result;

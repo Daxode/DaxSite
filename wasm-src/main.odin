@@ -19,13 +19,20 @@ State :: struct {
     ctx: runtime.Context,
     os:  OS,
 
+    // WebGPU
     instance:        wgpu.Instance,
-    surface:         wgpu.Surface,
     adapter:         wgpu.Adapter,
     device:          wgpu.Device,
-    config:          wgpu.SurfaceConfiguration,
     queue:           wgpu.Queue,
 
+    // Surface
+    config:          wgpu.SurfaceConfiguration,
+    surface:         wgpu.Surface,
+    depthTexture:    wgpu.Texture,
+    depthView:       wgpu.TextureView,
+    
+
+    // Meshes and materials
     meshes:          [dynamic]DefaultMesh,
     material:        [dynamic]DefaultMaterial,
     materialToMeshes: map[^DefaultMaterial]DefaultMeshGroup,
@@ -79,9 +86,33 @@ main :: proc() {
             alphaMode   = .Opaque,
         }
         resize();
-
+        
         // Setup queue
         state.queue = wgpu.DeviceGetQueue(state.device)
+        
+        // Create Depth Texture
+        depthFormat := wgpu.TextureFormat.Depth24Plus
+        state.depthTexture = wgpu.DeviceCreateTexture(state.device, &wgpu.TextureDescriptor{
+            label = "Depth Texture",
+            size = {state.config.width, state.config.height, 1},
+            mipLevelCount = 1,
+            sampleCount = 1,
+            dimension = ._2D,
+            format = .Depth24Plus,
+            usage = {.RenderAttachment},
+            viewFormatCount = 1,
+            viewFormats = &depthFormat,
+        });
+        state.depthView = wgpu.TextureCreateView(state.depthTexture, &wgpu.TextureViewDescriptor{
+            label = "Depth Texture View",
+            format = .Depth24Plus,
+            dimension = ._2D,
+            aspect = .DepthOnly,
+            baseMipLevel = 0,
+            mipLevelCount = 1,
+            baseArrayLayer = 0,
+            arrayLayerCount = 1,
+        });
 
         // Setup mesh and material arrays
         state.meshes = make([dynamic]DefaultMesh)
@@ -130,6 +161,7 @@ main :: proc() {
             3, 2, 6, 3, 6, 7, // top
             0, 4, 5, 0, 5, 1  // bottom
         }[:], &state.material[len(state.material)-1]));
+
 
 
 
@@ -226,6 +258,19 @@ frame :: proc "c" (dt: f32) {
             storeOp    = .Store,
             clearValue = math.lerp(wgpu.Color(state.os.clickedSmoothed), from, to),
         },
+        depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
+            view = state.depthView,
+            
+            depthClearValue = 1.0,
+            depthLoadOp = .Clear,
+            depthStoreOp = .Store,
+            depthReadOnly = false,
+
+            stencilClearValue = 0,
+            stencilLoadOp = {},
+            stencilStoreOp = {},
+            stencilReadOnly = true,
+        }
     },
     )
     defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
@@ -242,6 +287,19 @@ frame :: proc "c" (dt: f32) {
                 storeOp    = .Store,
                 clearValue = wgpu.Color{0.0, 0.0, 0.0, 1.0},
             },
+            depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
+                view = state.depthView,
+                
+                depthClearValue = 1.0,
+                depthLoadOp = .Clear,
+                depthStoreOp = .Store,
+                depthReadOnly = false,
+    
+                stencilClearValue = 0,
+                stencilLoadOp = {},
+                stencilStoreOp = {},
+                stencilReadOnly = true,
+            }
         })
         defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
 
@@ -285,6 +343,7 @@ frame :: proc "c" (dt: f32) {
     wgpu.QueueSubmit(state.queue, { command_buffer })
     wgpu.SurfacePresent(state.surface)
 }
+
 
 finish :: proc() {
     for &mesh in state.meshes {
