@@ -88,20 +88,9 @@ main :: proc() {
 
         // Load meshes and materials
         append(&render_manager.material, renderer.createDefaultMaterialTemplate(render_manager.device));
-        
-        //Create plane under cube
-        append(&render_manager.meshes, renderer.createMesh(render_manager.device, [dynamic]renderer.Vertex{
-            {{-1.0*5, -0.5, -1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {{ 1.0*5, -0.5, -1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {{ 1.0*5, -0.5,  1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {{-1.0*5, -0.5,  1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-        }[:], [dynamic]u32 {
-            0, 1, 2, 0, 2, 3
-        }[:], &render_manager.material[len(render_manager.material)-1]));
 
         // Load model
         importer_model.load_model(#load("../resources/models/duck.glb"), &state.render_manager)
-        importer_model.load_model(#load("../resources/models/box.glb"), &state.render_manager)
 
         // Group meshes by material
         for &mesh in render_manager.meshes {
@@ -122,16 +111,36 @@ main :: proc() {
                 usage = {.Uniform, .CopyDst},
                 mappedAtCreation = false
             });
+            
+            texture, texture_ok := material.texture.?
+            assert(texture_ok, "Material does not have a texture")
+            texture_view := wgpu.TextureCreateView(texture.texture, &wgpu.TextureViewDescriptor{
+                label = "Material Texture View",
+                format = .RGBA8Unorm,
+                dimension = ._2D,
+                aspect = .All,
+                baseMipLevel = 0,
+                mipLevelCount = 1,
+                baseArrayLayer = 0,
+                arrayLayerCount = 1,
+            });
 
-            group.bindGroup = wgpu.DeviceCreateBindGroup(render_manager.device, &wgpu.BindGroupDescriptor{
-                label = "Default Material Bind Group",
-                layout = material.bindGroupLayout,
-                entries = &wgpu.BindGroupEntry{
+            group_entries := [?]wgpu.BindGroupEntry{
+                {
                     binding = 0,
                     size = u64(group.uniformStride),
                     buffer = group.uniformBuffer,
                 },
-                entryCount = 1,
+                {
+                    binding = 1,
+                    textureView = texture_view
+                }
+            };
+            group.bindGroup = wgpu.DeviceCreateBindGroup(render_manager.device, &wgpu.BindGroupDescriptor{
+                label = "Default Material Bind Group",
+                layout = material.bindGroupLayout,
+                entries = transmute([^]wgpu.BindGroupEntry)&group_entries,
+                entryCount = len(group_entries),
             });
 
             for &mesh, i in group.meshes {
@@ -310,7 +319,7 @@ frame :: proc "c" (dt: f32) {
                 projection * view * linalg.matrix4_from_trs(
                     linalg.Vector3f32{state.os.pos.x, state.os.pos.y, state.os.pos.z},
                     linalg.quaternion_from_euler_angle_y(f32(state.os.timer)*f32(i)), //
-                    linalg.Vector3f32(0.01)
+                    linalg.Vector3f32(1)
                 ),
             }, size_of(renderer.UniformData))
         }

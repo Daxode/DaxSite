@@ -20,9 +20,8 @@ createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert,
     })
 
     // Create bind group layout
-    result.bindGroupLayout = wgpu.DeviceCreateBindGroupLayout(device, &wgpu.BindGroupLayoutDescriptor{
-        label = "Material Bind Group Layout",
-        entries = &wgpu.BindGroupLayoutEntry{
+    binding_group_entries := [?]wgpu.BindGroupLayoutEntry{
+        {
             binding = 0,
             visibility = {.Vertex},
             buffer = wgpu.BufferBindingLayout{
@@ -31,7 +30,20 @@ createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert,
                 minBindingSize = size_of(TUniform),
             }
         },
-        entryCount = 1,
+        {
+            binding = 1,
+            visibility = {.Fragment},
+            texture = wgpu.TextureBindingLayout{
+                sampleType = .Float,
+                viewDimension = ._2D,
+            }
+        }
+    }
+
+    result.bindGroupLayout = wgpu.DeviceCreateBindGroupLayout(device, &wgpu.BindGroupLayoutDescriptor{
+        label = "Material Bind Group Layout",
+        entries = transmute([^]wgpu.BindGroupLayoutEntry)&binding_group_entries,
+        entryCount = len(binding_group_entries),
     })
 
     // Create attribute layout from the vertex type

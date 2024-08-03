@@ -7,6 +7,7 @@ MaterialTemplate :: struct($TVert, $TUniform: typeid) {
     shader: wgpu.ShaderModule,
     pipeline: wgpu.RenderPipeline,
     bindGroupLayout: wgpu.BindGroupLayout,
+    texture: Maybe(Texture),
 }
 
 Vertex :: struct {
@@ -59,4 +60,10 @@ RenderManagerState :: struct {
     meshes:          [dynamic]DefaultMesh,
     material:        [dynamic]DefaultMaterial,
     materialToMeshes: map[^DefaultMaterial]DefaultMeshGroup,
+}
+
+Texture :: struct {
+    texture: wgpu.Texture,
+    view: wgpu.TextureView,
+    sampler: wgpu.Sampler,
 }
