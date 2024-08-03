@@ -10,7 +10,8 @@ import "core:strconv"
 import "js_ext"
 import "renderer"
 import "core:math/linalg"
-import "gltf2"
+import "importer_model"
+import gltf2 "glTF2"
 
 DefaultMesh :: renderer.Mesh(renderer.Vertex, renderer.UniformData);
 DefaultMeshGroup :: renderer.MeshGroup(renderer.Vertex, renderer.UniformData);
@@ -19,25 +20,10 @@ DefaultMaterial :: renderer.MaterialTemplate(renderer.Vertex, renderer.UniformDa
 State :: struct {
     ctx: runtime.Context,
     os:  OS,
-
-    // WebGPU
-    instance:        wgpu.Instance,
-    adapter:         wgpu.Adapter,
-    device:          wgpu.Device,
-    queue:           wgpu.Queue,
-
-    // Surface
-    config:          wgpu.SurfaceConfiguration,
-    surface:         wgpu.Surface,
-    depthTexture:    wgpu.Texture,
-    depthView:       wgpu.TextureView,
     
-    model_data: ^gltf2.Data,
+    duck_data_load: ^js_ext.fetch_promise_raw,
 
-    // Meshes and materials
-    meshes:          [dynamic]DefaultMesh,
-    material:        [dynamic]DefaultMaterial,
-    materialToMeshes: map[^DefaultMaterial]DefaultMeshGroup,
+    render_manager:        renderer.RenderManagerState,
 }
 
 @(private="file")
@@ -45,32 +31,26 @@ state: State
 
 main :: proc() {
     state.ctx = context
+    using state;
 
     os_init(&state.os)
 
-    container_gltf :: #load("../resources/models/duck.glb")
-    model_load_error: gltf2.Error
-    state.model_data, model_load_error = gltf2.parse(container_gltf, gltf2.Options{
-        is_glb = true,
-    })
-    if model_load_error != nil {
-        fmt.panicf("Failed to load model", model_load_error)
-    }
+    state.duck_data_load = js_ext.fetch("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/Duck/glTF-Binary/Duck.glb")
 
-    state.instance = wgpu.CreateInstance(nil)
-    if state.instance == nil {
+    render_manager.instance = wgpu.CreateInstance(nil)
+    if render_manager.instance == nil {
         panic("WebGPU is not supported")
     }
-    state.surface = os_get_surface(&state.os, state.instance)
+    render_manager.surface = os_get_surface(&state.os, render_manager.instance)
 
-    wgpu.InstanceRequestAdapter(state.instance, &{ compatibleSurface = state.surface }, on_adapter, nil)
+    wgpu.InstanceRequestAdapter(render_manager.instance, &{ compatibleSurface = render_manager.surface }, on_adapter, nil)
 
     on_adapter :: proc "c" (status: wgpu.RequestAdapterStatus, adapter: wgpu.Adapter, message: cstring, userdata: rawptr) {
         context = state.ctx
         if status != .Success || adapter == nil {
             fmt.panicf("request adapter failure: [%v] %s", status, message)
         }
-        state.adapter = adapter
+        render_manager.adapter = adapter
         wgpu.AdapterRequestDevice(adapter, nil, on_device)
     }
 
@@ -81,7 +61,7 @@ main :: proc() {
         if status != .Success || device == nil {
             fmt.panicf("request device failure: [%v] %s", status, message)
         }
-        state.device = device
+        render_manager.device = device
         found_limits := false
         limits: wgpu.SupportedLimits
         if limits, found_limits = wgpu.DeviceGetLimits(device); !found_limits {
@@ -89,8 +69,8 @@ main :: proc() {
         }
 
         // Setup surface
-        state.config = wgpu.SurfaceConfiguration {
-            device      = state.device,
+        render_manager.config = wgpu.SurfaceConfiguration {
+            device      = render_manager.device,
             usage       = { .RenderAttachment },
             format      = .BGRA8Unorm,
             presentMode = .Fifo,
@@ -99,122 +79,51 @@ main :: proc() {
         resize();
         
         // Setup queue
-        state.queue = wgpu.DeviceGetQueue(state.device)
+        render_manager.queue = wgpu.DeviceGetQueue(render_manager.device)
 
         // Setup mesh and material arrays
-        state.meshes = make([dynamic]DefaultMesh)
-        state.material = make([dynamic]DefaultMaterial)
-        state.materialToMeshes = make(map[^DefaultMaterial]DefaultMeshGroup)
+        render_manager.meshes = make([dynamic]DefaultMesh)
+        render_manager.material = make([dynamic]DefaultMaterial)
+        render_manager.materialToMeshes = make(map[^DefaultMaterial]DefaultMeshGroup)
 
         // Load meshes and materials
-        append(&state.material, renderer.createDefaultMaterialTemplate(state.device));
+        append(&render_manager.material, renderer.createDefaultMaterialTemplate(render_manager.device));
         
         //Create plane under cube
-        append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
+        append(&render_manager.meshes, renderer.createMesh(render_manager.device, [dynamic]renderer.Vertex{
             {{-1.0*5, -0.5, -1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
             {{ 1.0*5, -0.5, -1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
             {{ 1.0*5, -0.5,  1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
             {{-1.0*5, -0.5,  1.0*5}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
         }[:], [dynamic]u32 {
             0, 1, 2, 0, 2, 3
-        }[:], &state.material[len(state.material)-1]));
+        }[:], &render_manager.material[len(render_manager.material)-1]));
 
-        for mesh in state.model_data.meshes {
-            fmt.println("Creating mesh for", mesh.name)
-            for primitive in mesh.primitives {
-                pos_attr_index, has_pos_attr := primitive.attributes["POSITION"]
-                assert(has_pos_attr, "Mesh has no position attribute")
-                pos_attr := state.model_data.accessors[pos_attr_index]
-                mesh_verts := make([dynamic]renderer.Vertex, pos_attr.count)
-                fmt.println("Mesh has", pos_attr.count, "vertices", "with accessor", pos_attr)
-
-                if buffer_view_index, buffer_view_ok := pos_attr.buffer_view.?; buffer_view_ok {
-                    buffer_view := state.model_data.buffer_views[buffer_view_index]
-                    // fmt.println("Buffer view has", buffer_view)
-                    buffer := state.model_data.buffers[buffer_view.buffer]
-                    switch buffer_uri in buffer.uri {
-                        case string:
-                            fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
-                        case []byte:
-                            stride, _ := buffer_view.byte_stride.?
-                            for &vert, i in mesh_verts {
-                                index := u32(i)*stride + buffer_view.byte_offset + pos_attr.byte_offset
-                                vert.position = (transmute(^[3]f32)raw_data(buffer_uri[index:]))^
-                                // fmt.println("Position", i, "is", vert)
-                            }
-                    }
-                }
-
-                if normal_attr_index, has_normal_attr := primitive.attributes["NORMAL"]; has_normal_attr {
-                    normal_attr := state.model_data.accessors[normal_attr_index]
-                    if buffer_view_index, buffer_view_ok := normal_attr.buffer_view.?; buffer_view_ok {
-                        buffer_view := state.model_data.buffer_views[buffer_view_index]
-                        // fmt.println("Buffer view has", buffer_view)
-                        buffer := state.model_data.buffers[buffer_view.buffer]
-                        switch buffer_uri in buffer.uri {
-                            case string:
-                                fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
-                            case []byte:
-                                stride, _ := buffer_view.byte_stride.?
-                                for &vert, i in mesh_verts {
-                                    index := u32(i)*stride + buffer_view.byte_offset + normal_attr.byte_offset
-                                    vert.normal = (transmute(^[3]f32)raw_data(buffer_uri[index:]))^
-                                    // fmt.println("Normal", i, "is", vert)
-                                }
-                        }
-                    }
-                }
-
-
-                index_attr_index, has_index_attr := primitive.indices.?
-                assert(has_index_attr, "Mesh has no index attribute")
-                index_attr := state.model_data.accessors[index_attr_index]
-                mesh_indices := make([dynamic]u32, index_attr.count)
-                if buffer_view_index, buffer_view_ok := index_attr.buffer_view.?; buffer_view_ok {
-                    buffer_view := state.model_data.buffer_views[buffer_view_index]
-                    // fmt.println("Buffer view has", buffer_view)
-                    buffer := state.model_data.buffers[buffer_view.buffer]
-                    switch buffer_uri in buffer.uri {
-                        case string:
-                            fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
-                        case []byte:
-                            for &mesh_index, i in mesh_indices {
-                                index := u32(i)*2 + buffer_view.byte_offset
-                                mesh_index = u32((transmute(^u16)raw_data(buffer_uri[index:]))^)
-                                // fmt.println("Index", i, "is", mesh_index)
-                            }
-                    }
-                }
-                // fmt.println("Creating mesh with", len(mesh_verts), "vertices and", len(mesh_indices), "indices")
-                // fmt.println("Vertices", mesh_verts)
-                // fmt.println("Indices", mesh_indices)
-
-                append(&state.meshes, renderer.createMesh(state.device, mesh_verts[:], mesh_indices[:], &state.material[0]))
-            }
-        }
-
+        // Load model
+        importer_model.load_model(#load("../resources/models/duck.glb"), &state.render_manager)
+        importer_model.load_model(#load("../resources/models/box.glb"), &state.render_manager)
 
         // Group meshes by material
-        for &mesh in state.meshes {
-            if !(mesh.material in state.materialToMeshes) {
-                state.materialToMeshes[mesh.material] = {make([dynamic]^DefaultMesh), nil, nil, 0}
+        for &mesh in render_manager.meshes {
+            if !(mesh.material in render_manager.materialToMeshes) {
+                render_manager.materialToMeshes[mesh.material] = {make([dynamic]^DefaultMesh), nil, nil, 0}
             }
-            group := &state.materialToMeshes[mesh.material];
+            group := &render_manager.materialToMeshes[mesh.material];
             append(&group.meshes, &mesh);
         }
 
-        for material, &group in state.materialToMeshes {
+        for material, &group in render_manager.materialToMeshes {
             fmt.println("Creating bind group for material", material)
             fmt.println("Group has", len(group.meshes), "meshes")
             group.uniformStride = ceil_to_next_multiple(size_of(renderer.UniformData), limits.limits.minUniformBufferOffsetAlignment)
-            group.uniformBuffer = wgpu.DeviceCreateBuffer(state.device, &wgpu.BufferDescriptor{
+            group.uniformBuffer = wgpu.DeviceCreateBuffer(render_manager.device, &wgpu.BufferDescriptor{
                 label = "Uniform Buffer",
                 size = u64(group.uniformStride * u32(len(group.meshes))),
                 usage = {.Uniform, .CopyDst},
                 mappedAtCreation = false
             });
 
-            group.bindGroup = wgpu.DeviceCreateBindGroup(state.device, &wgpu.BindGroupDescriptor{
+            group.bindGroup = wgpu.DeviceCreateBindGroup(render_manager.device, &wgpu.BindGroupDescriptor{
                 label = "Default Material Bind Group",
                 layout = material.bindGroupLayout,
                 entries = &wgpu.BindGroupEntry{
@@ -226,7 +135,7 @@ main :: proc() {
             });
 
             for &mesh, i in group.meshes {
-                wgpu.QueueWriteBuffer(state.queue, group.uniformBuffer, u64(u32(i)*group.uniformStride), &renderer.UniformData{
+                wgpu.QueueWriteBuffer(render_manager.queue, group.uniformBuffer, u64(u32(i)*group.uniformStride), &renderer.UniformData{
                     0.0,
                     {},
                 }, size_of(renderer.UniformData))
@@ -241,23 +150,25 @@ ceil_to_next_multiple :: proc(value, multiple: u32) -> u32 {
     return (value + multiple - 1) / multiple * multiple
 }
 
+
 resize :: proc "c" () {
     context = state.ctx
+    using state
 
-    state.config.width, state.config.height = os_get_render_bounds(&state.os)
-    wgpu.SurfaceConfigure(state.surface, &state.config)
-    if state.depthTexture != nil {
+    render_manager.config.width, render_manager.config.height = os_get_render_bounds(&state.os)
+    wgpu.SurfaceConfigure(render_manager.surface, &render_manager.config)
+    if render_manager.depthTexture != nil {
         // Destroy the old depth texture
-        wgpu.TextureViewRelease(state.depthView)
-        wgpu.TextureDestroy(state.depthTexture)
-        wgpu.TextureRelease(state.depthTexture)
+        wgpu.TextureViewRelease(render_manager.depthView)
+        wgpu.TextureDestroy(render_manager.depthTexture)
+        wgpu.TextureRelease(render_manager.depthTexture)
     }
-
+    
     // Create Depth Texture
     depthFormat := wgpu.TextureFormat.Depth24Plus
-    state.depthTexture = wgpu.DeviceCreateTexture(state.device, &wgpu.TextureDescriptor{
+    render_manager.depthTexture = wgpu.DeviceCreateTexture(render_manager.device, &wgpu.TextureDescriptor{
         label = "Depth Texture",
-        size = {state.config.width, state.config.height, 1},
+        size = {render_manager.config.width, render_manager.config.height, 1},
         mipLevelCount = 1,
         sampleCount = 1,
         dimension = ._2D,
@@ -266,7 +177,7 @@ resize :: proc "c" () {
         viewFormatCount = 1,
         viewFormats = &depthFormat,
     });
-    state.depthView = wgpu.TextureCreateView(state.depthTexture, &wgpu.TextureViewDescriptor{
+    render_manager.depthView = wgpu.TextureCreateView(render_manager.depthTexture, &wgpu.TextureViewDescriptor{
         label = "Depth Texture View",
         format = .Depth24Plus,
         dimension = ._2D,
@@ -278,15 +189,27 @@ resize :: proc "c" () {
     });
 }
 
+trigger_once: b8
 frame :: proc "c" (dt: f32) {
     context = state.ctx
-
-    surface_texture := wgpu.SurfaceGetCurrentTexture(state.surface)
+    using state
+    
+    if state.duck_data_load.is_done == 1 {
+        if !trigger_once {
+            trigger_once = true
+            duck_data := state.duck_data_load.buffer[:state.duck_data_load.buffer_length]
+            fmt.println("Duck data is done", len(duck_data))
+        }
+    } else {
+        fmt.println("Duck data is not done")
+    }
+    
+    surface_texture := wgpu.SurfaceGetCurrentTexture(render_manager.surface)
     switch surface_texture.status {
         case .Success:
             // All good, could check for `surface_texture.suboptimal` here.
-        case .Timeout, .Outdated, .Lost:
-            // Skip this frame, and re-configure surface.
+            case .Timeout, .Outdated, .Lost:
+                // Skip this frame, and re-configure surface.
             if surface_texture.texture != nil {
                 wgpu.TextureRelease(surface_texture.texture)
             }
@@ -301,7 +224,7 @@ frame :: proc "c" (dt: f32) {
     frame := wgpu.TextureCreateView(surface_texture.texture, nil)
     defer wgpu.TextureViewRelease(frame)
 
-    command_encoder := wgpu.DeviceCreateCommandEncoder(state.device, nil)
+    command_encoder := wgpu.DeviceCreateCommandEncoder(render_manager.device, nil)
     defer wgpu.CommandEncoderRelease(command_encoder)
 
     from := wgpu.Color{0.05, 0.05, 0.1, 1.}
@@ -318,7 +241,7 @@ frame :: proc "c" (dt: f32) {
             clearValue = math.lerp(wgpu.Color(state.os.clickedSmoothed), from, to),
         },
         depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
-            view = state.depthView,
+            view = render_manager.depthView,
             
             depthClearValue = 1.0,
             depthLoadOp = .Clear,
@@ -336,7 +259,7 @@ frame :: proc "c" (dt: f32) {
     wgpu.RenderPassEncoderEnd(render_pass_encoder)
 
 
-    for material, meshGroup in state.materialToMeshes {
+    for material, meshGroup in render_manager.materialToMeshes {
         render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
         command_encoder, &{
             colorAttachmentCount = 1,
@@ -347,7 +270,7 @@ frame :: proc "c" (dt: f32) {
                 clearValue = wgpu.Color{0.0, 0.0, 0.0, 1.0},
             },
             depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
-                view = state.depthView,
+                view = render_manager.depthView,
                 
                 depthClearValue = 1.0,
                 depthLoadOp = .Clear,
@@ -363,7 +286,7 @@ frame :: proc "c" (dt: f32) {
         defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
 
         for &mesh, i in meshGroup.meshes {
-            projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(state.config.width)/f32(state.config.height), 0.0000000001, 100, false)
+            projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(render_manager.config.width)/f32(render_manager.config.height), 0.0000000001, 100, false)
             view := linalg.matrix4_look_at(linalg.Vector3f32{
                 state.os.cam_pos.x, state.os.cam_pos.y, state.os.cam_pos.z
                 // 0, 0, 0
@@ -382,7 +305,7 @@ frame :: proc "c" (dt: f32) {
             wgpu.RenderPassEncoderSetVertexBuffer(render_pass_encoder, 0, mesh.vertBuffer, 0, u64(len(mesh.vertices)*size_of(renderer.Vertex)))
             wgpu.RenderPassEncoderSetIndexBuffer(render_pass_encoder, mesh.indexBuffer, wgpu.IndexFormat.Uint32, 0, u64(len(mesh.indices)*size_of(u32)))
             wgpu.RenderPassEncoderDrawIndexed(render_pass_encoder, u32(len(mesh.indices)), 1, 0, 0, 0)
-            wgpu.QueueWriteBuffer(state.queue, meshGroup.uniformBuffer, u64(u32(i)*meshGroup.uniformStride), &renderer.UniformData{
+            wgpu.QueueWriteBuffer(render_manager.queue, meshGroup.uniformBuffer, u64(u32(i)*meshGroup.uniformStride), &renderer.UniformData{
                 f32(state.os.clickedSmoothed),
                 projection * view * linalg.matrix4_from_trs(
                     linalg.Vector3f32{state.os.pos.x, state.os.pos.y, state.os.pos.z},
@@ -399,23 +322,24 @@ frame :: proc "c" (dt: f32) {
 
     command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
     defer wgpu.CommandBufferRelease(command_buffer)
-    wgpu.QueueSubmit(state.queue, { command_buffer })
-    wgpu.SurfacePresent(state.surface)
+    wgpu.QueueSubmit(render_manager.queue, { command_buffer })
+    wgpu.SurfacePresent(render_manager.surface)
 }
 
 
 finish :: proc() {
-    for &mesh in state.meshes {
+    using state
+    for &mesh in render_manager.meshes {
         renderer.releaseMesh(&mesh)
     }
-    for &material in state.material {
+    for &material in render_manager.material {
         renderer.releaseMaterialTemplate(&material)
     }
-    wgpu.QueueRelease(state.queue)
-    wgpu.DeviceRelease(state.device)
-    wgpu.AdapterRelease(state.adapter)
-    wgpu.SurfaceRelease(state.surface)
-    wgpu.InstanceRelease(state.instance)
+    wgpu.QueueRelease(render_manager.queue)
+    wgpu.DeviceRelease(render_manager.device)
+    wgpu.AdapterRelease(render_manager.adapter)
+    wgpu.SurfaceRelease(render_manager.surface)
+    wgpu.InstanceRelease(render_manager.instance)
 }
 
 OS :: struct {
@@ -555,4 +479,12 @@ stop_callback :: proc(e: js.Event) {
     data : ^OS = (^OS)(e.user_data);
     data.clicked = 0
     js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.os.clicked))
+}
+
+@(export)
+malloc :: proc "contextless" (size: int, ptrToAlocatedPtr: ^rawptr) {
+    context = state.ctx
+	assert(size_of(rawptr) == size_of(u32), "rawptr is not the same size as u32")
+	data, ok := runtime.mem_alloc_bytes(size)
+	ptrToAlocatedPtr^ = raw_data(data)
 }

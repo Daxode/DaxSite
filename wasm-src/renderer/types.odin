@@ -37,3 +37,26 @@ MeshGroup :: struct($TVert: typeid, $TUniform: typeid) {
     uniformBuffer: wgpu.Buffer,
     uniformStride: u32,
 }
+
+DefaultMesh :: Mesh(Vertex, UniformData);
+DefaultMeshGroup :: MeshGroup(Vertex, UniformData);
+DefaultMaterial :: MaterialTemplate(Vertex, UniformData);
+
+RenderManagerState :: struct {
+    // WebGPU
+    instance:        wgpu.Instance,
+    adapter:         wgpu.Adapter,
+    device:          wgpu.Device,
+    queue:           wgpu.Queue,
+
+    // Surface
+    config:          wgpu.SurfaceConfiguration,
+    surface:         wgpu.Surface,
+    depthTexture:    wgpu.Texture,
+    depthView:       wgpu.TextureView,
+    
+    // Meshes and materials
+    meshes:          [dynamic]DefaultMesh,
+    material:        [dynamic]DefaultMaterial,
+    materialToMeshes: map[^DefaultMaterial]DefaultMeshGroup,
+}
