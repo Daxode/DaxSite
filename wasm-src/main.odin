@@ -10,6 +10,7 @@ import "core:strconv"
 import "js_ext"
 import "renderer"
 import "core:math/linalg"
+import "gltf2"
 
 DefaultMesh :: renderer.Mesh(renderer.Vertex, renderer.UniformData);
 DefaultMeshGroup :: renderer.MeshGroup(renderer.Vertex, renderer.UniformData);
@@ -31,6 +32,7 @@ State :: struct {
     depthTexture:    wgpu.Texture,
     depthView:       wgpu.TextureView,
     
+    model_data: ^gltf2.Data,
 
     // Meshes and materials
     meshes:          [dynamic]DefaultMesh,
@@ -45,6 +47,15 @@ main :: proc() {
     state.ctx = context
 
     os_init(&state.os)
+
+    container_gltf :: #load("../resources/models/duck.glb")
+    model_load_error: gltf2.Error
+    state.model_data, model_load_error = gltf2.parse(container_gltf, gltf2.Options{
+        is_glb = true,
+    })
+    if model_load_error != nil {
+        fmt.panicf("Failed to load model", model_load_error)
+    }
 
     state.instance = wgpu.CreateInstance(nil)
     if state.instance == nil {
@@ -97,17 +108,6 @@ main :: proc() {
 
         // Load meshes and materials
         append(&state.material, renderer.createDefaultMaterialTemplate(state.device));
-        // append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
-        //     {{ 0.0, -0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-        //     {{ 0.5, -0.5, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-        //     {{ 0.5,  0.5, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-        // }[:], [dynamic]u32{0, 1, 2}[:], &state.material[len(state.material)-1]));
-        // append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
-        //     {0.2*{-1.0, -1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-        //     {0.2*{ 1.0, -1.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-        //     {0.2*{ 1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-        //     {0.2*{-1.0,  1.0, 0.0}, {0.0, 0.0, 1.0}, {0.0, 0.0}},
-        // }[:], [dynamic]u32{0, 1, 2, 0, 2, 3}[:], &state.material[len(state.material)-1]));
         
         //Create plane under cube
         append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
@@ -119,26 +119,79 @@ main :: proc() {
             0, 1, 2, 0, 2, 3
         }[:], &state.material[len(state.material)-1]));
 
-        // Create Cube
-        append(&state.meshes, renderer.createMesh(state.device, [dynamic]renderer.Vertex{
-            {1*{-1.0, -1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {1*{ 1.0, -1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {1*{ 1.0,  1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {1*{-1.0,  1.0, -1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {1*{-1.0, -1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {1*{ 1.0, -1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {1*{ 1.0,  1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}},
-            {1*{-1.0,  1.0,  1.0}, {0.0, 0.0, 0.0}, {0.0, 0.0}}
-        }[:], [dynamic]u32 {
-            0, 1, 2, 0, 2, 3, // front
-            1, 5, 6, 1, 6, 2, // right
-            5, 4, 7, 5, 7, 6, // back
-            4, 0, 3, 4, 3, 7, // left
-            3, 2, 6, 3, 6, 7, // top
-            0, 4, 5, 0, 5, 1  // bottom
-        }[:], &state.material[len(state.material)-1]));
+        for mesh in state.model_data.meshes {
+            fmt.println("Creating mesh for", mesh.name)
+            for primitive in mesh.primitives {
+                pos_attr_index, has_pos_attr := primitive.attributes["POSITION"]
+                assert(has_pos_attr, "Mesh has no position attribute")
+                pos_attr := state.model_data.accessors[pos_attr_index]
+                mesh_verts := make([dynamic]renderer.Vertex, pos_attr.count)
+                fmt.println("Mesh has", pos_attr.count, "vertices", "with accessor", pos_attr)
+
+                if buffer_view_index, buffer_view_ok := pos_attr.buffer_view.?; buffer_view_ok {
+                    buffer_view := state.model_data.buffer_views[buffer_view_index]
+                    // fmt.println("Buffer view has", buffer_view)
+                    buffer := state.model_data.buffers[buffer_view.buffer]
+                    switch buffer_uri in buffer.uri {
+                        case string:
+                            fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
+                        case []byte:
+                            stride, _ := buffer_view.byte_stride.?
+                            for &vert, i in mesh_verts {
+                                index := u32(i)*stride + buffer_view.byte_offset + pos_attr.byte_offset
+                                vert.position = (transmute(^[3]f32)raw_data(buffer_uri[index:]))^
+                                // fmt.println("Position", i, "is", vert)
+                            }
+                    }
+                }
+
+                if normal_attr_index, has_normal_attr := primitive.attributes["NORMAL"]; has_normal_attr {
+                    normal_attr := state.model_data.accessors[normal_attr_index]
+                    if buffer_view_index, buffer_view_ok := normal_attr.buffer_view.?; buffer_view_ok {
+                        buffer_view := state.model_data.buffer_views[buffer_view_index]
+                        // fmt.println("Buffer view has", buffer_view)
+                        buffer := state.model_data.buffers[buffer_view.buffer]
+                        switch buffer_uri in buffer.uri {
+                            case string:
+                                fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
+                            case []byte:
+                                stride, _ := buffer_view.byte_stride.?
+                                for &vert, i in mesh_verts {
+                                    index := u32(i)*stride + buffer_view.byte_offset + normal_attr.byte_offset
+                                    vert.normal = (transmute(^[3]f32)raw_data(buffer_uri[index:]))^
+                                    // fmt.println("Normal", i, "is", vert)
+                                }
+                        }
+                    }
+                }
 
 
+                index_attr_index, has_index_attr := primitive.indices.?
+                assert(has_index_attr, "Mesh has no index attribute")
+                index_attr := state.model_data.accessors[index_attr_index]
+                mesh_indices := make([dynamic]u32, index_attr.count)
+                if buffer_view_index, buffer_view_ok := index_attr.buffer_view.?; buffer_view_ok {
+                    buffer_view := state.model_data.buffer_views[buffer_view_index]
+                    // fmt.println("Buffer view has", buffer_view)
+                    buffer := state.model_data.buffers[buffer_view.buffer]
+                    switch buffer_uri in buffer.uri {
+                        case string:
+                            fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
+                        case []byte:
+                            for &mesh_index, i in mesh_indices {
+                                index := u32(i)*2 + buffer_view.byte_offset
+                                mesh_index = u32((transmute(^u16)raw_data(buffer_uri[index:]))^)
+                                // fmt.println("Index", i, "is", mesh_index)
+                            }
+                    }
+                }
+                // fmt.println("Creating mesh with", len(mesh_verts), "vertices and", len(mesh_indices), "indices")
+                // fmt.println("Vertices", mesh_verts)
+                // fmt.println("Indices", mesh_indices)
+
+                append(&state.meshes, renderer.createMesh(state.device, mesh_verts[:], mesh_indices[:], &state.material[0]))
+            }
+        }
 
 
         // Group meshes by material
@@ -334,7 +387,7 @@ frame :: proc "c" (dt: f32) {
                 projection * view * linalg.matrix4_from_trs(
                     linalg.Vector3f32{state.os.pos.x, state.os.pos.y, state.os.pos.z},
                     linalg.quaternion_from_euler_angle_y(f32(state.os.timer)*f32(i)), //
-                    linalg.Vector3f32(0.4)
+                    linalg.Vector3f32(0.01)
                 ),
             }, size_of(renderer.UniformData))
         }
