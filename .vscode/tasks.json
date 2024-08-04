@@ -22,6 +22,18 @@
                 "kind": "test",
                 "isDefault": true
             }
+        },
+        {
+            "label": "Build Client Version using GLFW",
+            "type": "shell",
+            "command": "make BuildClientVersion",
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Client Version using GLFW",
+            "type": "shell",
+            "command": "make RunClientVersion",
+            "problemMatcher": []
         }
     ]
 }

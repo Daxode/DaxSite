@@ -1,13 +1,11 @@
 ﻿package main
 
 import "vendor:wgpu"
-import js "vendor:wasm/js"
 import "core:fmt"
 import "base:runtime"
 import "core:strings"
 import "core:math"
 import "core:strconv"
-import "js_ext"
 import "renderer"
 import "core:math/linalg"
 import "importer_model"
@@ -21,12 +19,21 @@ State :: struct {
     ctx: runtime.Context,
     os:  OS,
     
-    duck_data_load: ^js_ext.fetch_promise_raw,
+    clicked: f64,
+    clickedSmoothed: f64,
+    touchHeld: bool,
+
+    timer: f64,
+
+    pos: [3]f32,
+    cam_pos: [3]f32,
+    
+    // duck_data_load: ^js_ext.fetch_promise_raw,
 
     render_manager:        renderer.RenderManagerState,
 }
 
-@(private="file")
+//@(private="file")
 state: State
 
 main :: proc() {
@@ -35,7 +42,7 @@ main :: proc() {
 
     os_init(&state.os)
 
-    state.duck_data_load = js_ext.fetch("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/Duck/glTF-Binary/Duck.glb")
+    // state.duck_data_load = js_ext.fetch("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/Duck/glTF-Binary/Duck.glb")
 
     render_manager.instance = wgpu.CreateInstance(nil)
     if render_manager.instance == nil {
@@ -203,15 +210,15 @@ frame :: proc "c" (dt: f32) {
     context = state.ctx
     using state
     
-    if state.duck_data_load.is_done == 1 {
-        if !trigger_once {
-            trigger_once = true
-            duck_data := state.duck_data_load.buffer[:state.duck_data_load.buffer_length]
-            fmt.println("Duck data is done", len(duck_data))
-        }
-    } else {
-        fmt.println("Duck data is not done")
-    }
+    // if state.duck_data_load.is_done == 1 {
+    //     if !trigger_once {
+    //         trigger_once = true
+    //         duck_data := state.duck_data_load.buffer[:state.duck_data_load.buffer_length]
+    //         fmt.println("Duck data is done", len(duck_data))
+    //     }
+    // } else {
+    //     fmt.println("Duck data is not done")
+    // }
     
     surface_texture := wgpu.SurfaceGetCurrentTexture(render_manager.surface)
     switch surface_texture.status {
@@ -238,7 +245,7 @@ frame :: proc "c" (dt: f32) {
 
     from := wgpu.Color{0.05, 0.05, 0.1, 1.}
     to := wgpu.Color{0.6, 0.2, 0.7, 1.}
-    state.os.clickedSmoothed = math.lerp(state.os.clickedSmoothed, state.os.clicked, f64(2*dt))
+    state.clickedSmoothed = math.lerp(state.clickedSmoothed, state.clicked, f64(2*dt))
 
     render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
     command_encoder, &{
@@ -247,7 +254,7 @@ frame :: proc "c" (dt: f32) {
             view       = frame,
             loadOp     = .Clear,
             storeOp    = .Store,
-            clearValue = math.lerp(wgpu.Color(state.os.clickedSmoothed), from, to),
+            clearValue = math.lerp(wgpu.Color(state.clickedSmoothed), from, to),
         },
         depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
             view = render_manager.depthView,
@@ -295,15 +302,15 @@ frame :: proc "c" (dt: f32) {
         defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
 
         for &mesh, i in meshGroup.meshes {
-            projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(render_manager.config.width)/f32(render_manager.config.height), 0.0000000001, 100, false)
+            projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(render_manager.config.width)/f32(render_manager.config.height), 0.00001, 1000, false)
             view := linalg.matrix4_look_at(linalg.Vector3f32{
-                state.os.cam_pos.x, state.os.cam_pos.y, state.os.cam_pos.z
+                state.cam_pos.x, state.cam_pos.y, state.cam_pos.z
                 // 0, 0, 0
             }, linalg.Vector3f32{
-                // state.os.cam_pos.x, state.os.cam_pos.y, state.os.cam_pos.z,
-                math.cos(f32(state.os.clickedSmoothed)*6.28)*20,
+                // state.cam_pos.x, state.cam_pos.y, state.cam_pos.z,
+                math.cos(f32(0.25)*6.28)*20,
                 0,
-                math.sin(f32(state.os.clickedSmoothed)*6.28)*20
+                math.sin(f32(0.25)*6.28)*20
             }, linalg.Vector3f32{
                 0.0, 1.0, 0.0
             })
@@ -315,18 +322,18 @@ frame :: proc "c" (dt: f32) {
             wgpu.RenderPassEncoderSetIndexBuffer(render_pass_encoder, mesh.indexBuffer, wgpu.IndexFormat.Uint32, 0, u64(len(mesh.indices)*size_of(u32)))
             wgpu.RenderPassEncoderDrawIndexed(render_pass_encoder, u32(len(mesh.indices)), 1, 0, 0, 0)
             wgpu.QueueWriteBuffer(render_manager.queue, meshGroup.uniformBuffer, u64(u32(i)*meshGroup.uniformStride), &renderer.UniformData{
-                f32(state.os.clickedSmoothed),
+                f32(state.clickedSmoothed),
                 projection * view * linalg.matrix4_from_trs(
-                    linalg.Vector3f32{state.os.pos.x, state.os.pos.y, state.os.pos.z},
-                    linalg.quaternion_from_euler_angle_y(f32(state.os.timer)*f32(i)), //
+                    linalg.Vector3f32{state.pos.x, state.pos.y, state.pos.z},
+                    linalg.quaternion_from_euler_angle_y(f32(state.timer)), //
                     linalg.Vector3f32(1)
                 ),
             }, size_of(renderer.UniformData))
         }
         wgpu.RenderPassEncoderEnd(render_pass_encoder)
     }
-    fmt.println("Finished drawing meshes")
-    state.os.timer += f64(dt)
+    // fmt.println("Finished drawing meshes")
+    state.timer += f64(dt)
 
 
     command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
@@ -349,151 +356,4 @@ finish :: proc() {
     wgpu.AdapterRelease(render_manager.adapter)
     wgpu.SurfaceRelease(render_manager.surface)
     wgpu.InstanceRelease(render_manager.instance)
-}
-
-OS :: struct {
-    initialized: bool,
-    clicked: f64,
-    clickedSmoothed: f64,
-    touchHeld: bool,
-
-    timer: f64,
-
-    pos: [3]f32,
-    cam_pos: [3]f32
-}
-
-@(private="file")
-g_os: ^OS
-
-os_init :: proc(os: ^OS) {
-    g_os = os
-    assert(js.add_window_event_listener(.Resize, nil, size_callback))
-    assert(js.add_event_listener("start", .Click, os, start_callback))
-    assert(js.add_event_listener("stop", .Click, os, stop_callback))
-
-    js.add_window_event_listener(.Touch_Start, nil, proc(e: js.Event) {
-        state.os.touchHeld = true
-    })
-
-    js.add_window_event_listener(.Touch_Cancel, nil, proc(e: js.Event) {
-        state.os.touchHeld = false
-    })
-
-    js.add_window_event_listener(.Pointer_Move, nil, proc(e: js.Event) {
-        if (0 in e.mouse.buttons || state.os.touchHeld)
-        {
-            state.os.clicked += f64(e.mouse.movement.x)/200
-            state.os.clicked = clamp(state.os.clicked, 0, 1)
-            js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.os.clicked))
-        }
-    })
-
-    js.add_window_event_listener(.Key_Press, nil, proc(e: js.Event) {
-        // fmt.println("Key down", e.options)
-    })
-
-    js.add_custom_event_listener("pos-x", "input", nil, proc(e: js.Event) {
-        data : [256]byte;
-        state.os.pos.x = f32(strconv.atof(js.get_element_value_string("pos-x", data[:])))
-    })
-
-    js.add_custom_event_listener("pos-y", "input", nil, proc(e: js.Event) {
-        data : [256]byte;
-        state.os.pos.y = f32(strconv.atof(js.get_element_value_string("pos-y", data[:])))
-    })
-
-    js.add_custom_event_listener("pos-z", "input", nil, proc(e: js.Event) {
-        data : [256]byte;
-        state.os.pos.z = f32(strconv.atof(js.get_element_value_string("pos-z", data[:])))
-    })
-
-    js.add_custom_event_listener("cam-x", "input", nil, proc(e: js.Event) {
-        data : [256]byte;
-        state.os.cam_pos.x = f32(strconv.atof(js.get_element_value_string("cam-x", data[:])))
-    })
-
-    js.add_custom_event_listener("cam-y", "input", nil, proc(e: js.Event) {
-        data : [256]byte;
-        state.os.cam_pos.y = f32(strconv.atof(js.get_element_value_string("cam-y", data[:])))
-    })
-
-    js.add_custom_event_listener("cam-z", "input", nil, proc(e: js.Event) {
-        data : [256]byte;
-        state.os.cam_pos.z = f32(strconv.atof(js.get_element_value_string("cam-z", data[:])))
-    })
-
-
-    js.add_window_event_listener(.HashChange, nil, proc(e: js.Event) {
-        buf := [256]u8{};
-        val := js_ext.get_current_url(buf[:])
-        fmt.println("Current URL:", val)
-    })
-}
-
-// NOTE: frame loop is done by the runtime.js repeatedly calling `step`.
-os_run :: proc(os: ^OS) {
-    os.initialized = true
-}
-
-os_get_render_bounds :: proc(os: ^OS) -> (width, height: u32) {
-    rect := js.get_bounding_client_rect("c")
-    return u32(rect.width), u32(rect.height)
-}
-
-os_get_surface :: proc(os: ^OS, instance: wgpu.Instance) -> wgpu.Surface {
-    return wgpu.InstanceCreateSurface(
-    instance,
-    &wgpu.SurfaceDescriptor{
-        nextInChain = &wgpu.SurfaceDescriptorFromCanvasHTMLSelector{
-            sType = .SurfaceDescriptorFromCanvasHTMLSelector,
-            selector = "#c",
-        },
-    },
-    )
-}
-
-@(private="file", export)
-step :: proc(dt: f32) -> bool {
-    if !g_os.initialized {
-        return true
-    }
-
-    frame(dt)
-    return true
-}
-
-@(private="file", fini)
-os_fini :: proc() {
-    js.remove_window_event_listener(.Resize, nil, size_callback)
-    js.remove_event_listener("start", .Click, g_os, start_callback)
-    js.remove_event_listener("stop", .Click, g_os, stop_callback)
-
-    finish()
-}
-
-size_callback :: proc(e: js.Event) {
-    resize()
-}
-
-start_callback :: proc(e: js.Event) {
-    data : ^OS = (^OS)(e.user_data);
-    fmt.println("Clicked!", data)
-    data.clicked += 0.1
-    data.clicked = clamp(data.clicked, 0, 1)
-    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.os.clicked))
-}
-
-stop_callback :: proc(e: js.Event) {
-    data : ^OS = (^OS)(e.user_data);
-    data.clicked = 0
-    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.os.clicked))
-}
-
-@(export)
-malloc :: proc "contextless" (size: int, ptrToAlocatedPtr: ^rawptr) {
-    context = state.ctx
-	assert(size_of(rawptr) == size_of(u32), "rawptr is not the same size as u32")
-	data, ok := runtime.mem_alloc_bytes(size)
-	ptrToAlocatedPtr^ = raw_data(data)
 }

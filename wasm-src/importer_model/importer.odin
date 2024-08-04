@@ -39,10 +39,12 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
                     case string:
                         fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
                     case []byte:
-                        stride, _ := buffer_view.byte_stride.?
+                        stride, stride_ok := buffer_view.byte_stride.?
+                        stride = stride_ok ? stride : 12 
                         for &vert, i in mesh_verts {
                             index := u32(i)*stride + buffer_view.byte_offset + pos_attr.byte_offset
                             vert.position = (transmute(^[3]f32)raw_data(buffer_uri[index:]))^
+                            vert.uv = vert.position.xy + 0.5
                             // fmt.println("Position", i, "is", vert)
                         }
                 }
@@ -58,7 +60,8 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
                         case string:
                             fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
                         case []byte:
-                            stride, _ := buffer_view.byte_stride.?
+                            stride, stride_ok := buffer_view.byte_stride.?
+                            stride = stride_ok ? stride : 12
                             for &vert, i in mesh_verts {
                                 index := u32(i)*stride + buffer_view.byte_offset + normal_attr.byte_offset
                                 vert.normal = (transmute(^[3]f32)raw_data(buffer_uri[index:]))^
@@ -78,7 +81,8 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
                         case string:
                             fmt.panicf("Buffer has URI", buffer_uri, "which is not supported currently.. Might be able to use fetch in future")
                         case []byte:
-                            stride, _ := buffer_view.byte_stride.?
+                            stride, stride_ok := buffer_view.byte_stride.?
+                            stride = stride_ok ? stride : 8
                             for &vert, i in mesh_verts {
                                 index := u32(i)*stride + buffer_view.byte_offset + uv_attr.byte_offset
                                 vert.uv = (transmute(^[2]f32)raw_data(buffer_uri[index:]))^
@@ -118,6 +122,7 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
             }
 
             // Get material of primitive
+            found_texture := false
             if material_index, material_ok := primitive.material.?; material_ok{
                 material := model_data.materials[material_index]
 
@@ -129,8 +134,8 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
                         // Get image of texture
                         if base_color_image_index, base_color_image_ok := base_color_texture.source.?; base_color_image_ok {
                             base_color_sampler_index, base_color_sampler_ok := base_color_texture.sampler.?;
-                            assert(base_color_sampler_ok, "Texture has no sampler")
-                            base_color_sampler := model_data.samplers[base_color_sampler_index]
+                            // assert(base_color_sampler_ok, "Texture has no sampler")
+                            // base_color_sampler := model_data.samplers[base_color_sampler_index]
                             base_color_image := model_data.images[base_color_image_index]
 
                             // fmt.println("Base color texture", base_color_image, "with sampler", base_color_sampler)
@@ -148,9 +153,11 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
                                         switch image_type {
                                             case .PNG:
                                                 state.material[0].texture = create_texture_from_png(state, data)
+                                                found_texture = true
                                             case .JPEG:
                                                 state.material[0].texture = create_texture_from_png(state, #load("../../resources/models/DaxLogoFlatGradientLongerStroked.png"))
                                                 fmt.println("JPEG images are not supported yet, using fallback image")
+                                                found_texture = true
                                         }
                                 }
                             }
@@ -159,7 +166,10 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
                 }
             }
 
-            // fmt.println("Creating mesh with", len(mesh_verts), "vertices and", len(mesh_indices), "indices")
+            if !found_texture {
+                state.material[0].texture = create_texture_from_png(state, #load("../../resources/models/DaxLogoFlatGradientLongerStroked.png"))
+            } 
+            fmt.println("Creating mesh with", len(mesh_verts), "vertices and", len(mesh_indices), "indices")
             // fmt.println("Vertices", mesh_verts)
             // fmt.println("Indices", mesh_indices)
 

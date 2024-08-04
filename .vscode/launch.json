@@ -12,5 +12,12 @@
             "webRoot": "${workspaceFolder}",
             "preLaunchTask": "Build wasm-src.wasm"
         },
+        {
+            "name": "Launch",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/client.exe",
+            "preLaunchTask": "Build Client Version using GLFW",
+        },
     ]
 }

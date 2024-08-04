@@ -111,6 +111,12 @@ createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert,
             depthCompare = .Less,
             stencilReadMask = 0,
             stencilWriteMask = 0,
+            stencilFront = wgpu.StencilFaceState{
+                compare = .Always,
+            },
+            stencilBack = wgpu.StencilFaceState{
+                compare = .Always,
+            }
         },
     })
     
