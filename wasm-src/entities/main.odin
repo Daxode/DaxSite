@@ -1,7 +1,9 @@
 package entities
 
-CreateEntityStore :: proc() -> EntityStore {
-    return EntityStore{
+CreateEntityStore :: proc() -> ^EntityStore {
+    chunks := make([dynamic]ChunkData, 1)
+    entityStore := new(EntityStore)
+    entityStore^ = {
         entitySet = EntitySet{
             entities = make([dynamic]EntityId),
             freeList = make([dynamic]u32),
@@ -9,13 +11,19 @@ CreateEntityStore :: proc() -> EntityStore {
             entityInChunkIndex = make([dynamic]u8),
         },
         archetypes = make([dynamic]Archetype),
-        chunks = make([dynamic]ChunkData),
+        chunks = chunks,
     }
+    chunks[0] = ChunkData {
+        data= make([dynamic]u8, 128)[:],
+        entityCount= 0,
+        archetype= &entityStore.nullArchetype,
+    }
+    return entityStore
 }
 
 DeleteEntityStore :: proc(store: ^EntityStore) {
     // Delete all the chunks
-    for &chunk in store.chunks {
+    for &chunk, i in store.chunks {
         delete(chunk.data)
     }
     delete(store.chunks)
@@ -34,6 +42,9 @@ DeleteEntityStore :: proc(store: ^EntityStore) {
     delete(store.entitySet.freeList)
     delete(store.entitySet.entityInChunk)
     delete(store.entitySet.entityInChunkIndex)
+
+    // Delete the store
+    free(store)
 }
 
 // This function finds all entities that have the given components
@@ -167,6 +178,13 @@ RemoveEntityWithComponents :: proc(store: ^EntityStore, entity: EntityId) {
 }
 
 RemoveChunkDataFromEntityId :: proc(store: ^EntityStore, entity: EntityId) {
+    if !EntityIdExists(&store.entitySet, entity) {
+        return
+    }
+    if !EntityHasChunkData(store, entity) {
+        return
+    }
+
     chunkIndex := store.entitySet.entityInChunk[entity.index]
     indexInChunk := store.entitySet.entityInChunkIndex[entity.index]
     chunk := &store.chunks[chunkIndex];
@@ -180,10 +198,10 @@ RemoveChunkDataFromEntityId :: proc(store: ^EntityStore, entity: EntityId) {
         archetype := chunk.archetype
         runningComponentOffset := u16(0)
         for componentType, i in archetype.componentTypes {
-            runningComponentOffset += size_of(componentType) * 128
             currentOffset := u16(indexInChunk) * size_of(componentType) + runningComponentOffset
             lastOffset := u16(lastEntityChunkIndex) * size_of(componentType) + runningComponentOffset
             copy(chunk.data[currentOffset:currentOffset+size_of(componentType)], chunk.data[lastOffset:lastOffset+size_of(componentType)])
+            runningComponentOffset += size_of(componentType) * 128
         }
         store.entitySet.entityInChunkIndex[lastEntityId.index] = indexInChunk
         store.entitySet.entityInChunk[lastEntityId.index] = chunkIndex
@@ -225,6 +243,10 @@ RemoveChunkDataFromEntityId :: proc(store: ^EntityStore, entity: EntityId) {
     // Remove the entity from the entity set
     store.entitySet.entityInChunk[entity.index] = 0
     store.entitySet.entityInChunkIndex[entity.index] = 0
+}
+
+EntityHasChunkData :: proc(store: ^EntityStore, entity: EntityId) -> bool {
+    return store.entitySet.entityInChunk[entity.index] != 0
 }
 
 EntityIdExists :: proc(set: ^EntitySet, entity: EntityId) -> bool {

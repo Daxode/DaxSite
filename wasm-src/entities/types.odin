@@ -34,4 +34,5 @@ EntityStore :: struct {
     archetypes: [dynamic]Archetype,
     chunks: [dynamic]ChunkData,
     freeChunk: [dynamic]ChunkIndex,
+    nullArchetype: Archetype,
 }
