@@ -5,7 +5,7 @@ Run:
 	python -m http.server
 
 BuildClientVersion:
-	odin build ./wasm-src -out:client.exe -target="windows_amd64" -o:none -debug
+	odin build ./wasm-src -out:client.exe -target="windows_amd64" -o:none -debug -resource:resources.rc
 
 RunClientVersion:
 	./client.exe
