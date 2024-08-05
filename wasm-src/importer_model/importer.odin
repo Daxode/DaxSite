@@ -152,10 +152,10 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
                                         image_type, _ := base_color_image.type.?
                                         switch image_type {
                                             case .PNG:
-                                                state.material[0].texture = create_texture_from_png(state, data)
+                                                state.material[0].textures[0] = create_texture_from_png(state, data)
                                                 found_texture = true
                                             case .JPEG:
-                                                state.material[0].texture = create_texture_from_png(state, #load("../../resources/models/DaxLogoFlatGradientLongerStroked.png"))
+                                                state.material[0].textures[0] = create_texture_from_png(state, #load("../../resources/models/DaxLogoFlatGradientLongerStroked.png"))
                                                 fmt.println("JPEG images are not supported yet, using fallback image")
                                                 found_texture = true
                                         }
@@ -167,7 +167,7 @@ load_model_from_data :: proc(model_data: ^gltf2.Data, state: ^renderer.RenderMan
             }
 
             if !found_texture {
-                state.material[0].texture = create_texture_from_png(state, #load("../../resources/models/DaxLogoFlatGradientLongerStroked.png"))
+                state.material[0].textures[0] = create_texture_from_png(state, #load("../../resources/models/DaxLogoFlatGradientLongerStroked.png"))
             } 
             fmt.println("Creating mesh with", len(mesh_verts), "vertices and", len(mesh_indices), "indices")
             // fmt.println("Vertices", mesh_verts)

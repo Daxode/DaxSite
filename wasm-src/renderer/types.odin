@@ -16,11 +16,9 @@ Vertex :: struct {
     uv: [2]f32,
 }
 
-Mat4x4 :: matrix[4, 4]f32;
-
 UniformData :: struct #align(16) {
     time: f32,
-    objectTransform: Mat4x4,
+    objectTransform: linalg.Matrix4x4f32,
 }
 
 Mesh :: struct($TVert: typeid, $TUniform: typeid) {
@@ -29,7 +27,12 @@ Mesh :: struct($TVert: typeid, $TUniform: typeid) {
     vertBuffer: wgpu.Buffer,
     indexBuffer: wgpu.Buffer,
     
-    material: ^MaterialTemplate(TVert, TUniform),
+    material: ^RenderInstance(TVert, TUniform),
+}
+
+RenderInstance :: struct($TVert: typeid, $TUniform: typeid) {
+    materialTemplate: MaterialTemplate(TVert, TUniform),
+    textures: [4]Texture,
 }
 
 MeshGroup :: struct($TVert: typeid, $TUniform: typeid) {
@@ -39,9 +42,12 @@ MeshGroup :: struct($TVert: typeid, $TUniform: typeid) {
     uniformStride: u32,
 }
 
-DefaultMesh :: Mesh(Vertex, UniformData);
-DefaultMeshGroup :: MeshGroup(Vertex, UniformData);
-DefaultMaterial :: MaterialTemplate(Vertex, UniformData);
+RendererSet :: struct($TVert: typeid, $TUniform: typeid) {
+    meshes:          [dynamic]Mesh(TVert, TUniform),
+    material:        [dynamic]RenderInstance(TVert, TUniform),
+    materialToMeshes: map[^RenderInstance(TVert, TUniform)]MeshGroup(TVert, TUniform),
+}
+
 
 RenderManagerState :: struct {
     // WebGPU
@@ -57,10 +63,9 @@ RenderManagerState :: struct {
     depthView:       wgpu.TextureView,
     
     // Meshes and materials
-    meshes:          [dynamic]DefaultMesh,
-    material:        [dynamic]DefaultMaterial,
-    materialToMeshes: map[^DefaultMaterial]DefaultMeshGroup,
+    using rendererSet : RendererSet(Vertex, UniformData), // Later render sets can be merged 
 }
+
 
 Texture :: struct {
     texture: wgpu.Texture,

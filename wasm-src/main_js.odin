@@ -9,31 +9,29 @@ import "vendor:wgpu"
 
 OS :: struct {
     initialized: bool,
+    input: InputState,
 }
 
 @(private="file")
 g_os: ^OS
 
+@(private="file")
+ctx: runtime.Context
+
 os_init :: proc(os: ^OS) {
     g_os = os
+    ctx = context
+
     assert(js.add_window_event_listener(.Resize, nil, size_callback))
     assert(js.add_event_listener("start", .Click, os, start_callback))
     assert(js.add_event_listener("stop", .Click, os, stop_callback))
 
-    js.add_window_event_listener(.Touch_Start, nil, proc(e: js.Event) {
-        state.touchHeld = true
-    })
-
-    js.add_window_event_listener(.Touch_Cancel, nil, proc(e: js.Event) {
-        state.touchHeld = false
-    })
-
     js.add_window_event_listener(.Pointer_Move, nil, proc(e: js.Event) {
-        if (0 in e.mouse.buttons || state.touchHeld)
+        if (0 in e.mouse.buttons)
         {
-            state.clicked += f64(e.mouse.movement.x)/200
-            state.clicked = clamp(state.clicked, 0, 1)
-            js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.clicked))
+            g_os.input.clicked += f64(e.mouse.movement.x)/200
+            g_os.input.clicked = clamp(g_os.input.clicked, 0, 1)
+            js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", g_os.input.clicked))
         }
     })
 
@@ -43,32 +41,32 @@ os_init :: proc(os: ^OS) {
 
     js.add_custom_event_listener("pos-x", "input", nil, proc(e: js.Event) {
         data : [256]byte;
-        state.pos.x = f32(strconv.atof(js.get_element_value_string("pos-x", data[:])))
+        g_os.input.pos.x = f32(strconv.atof(js.get_element_value_string("pos-x", data[:])))
     })
 
     js.add_custom_event_listener("pos-y", "input", nil, proc(e: js.Event) {
         data : [256]byte;
-        state.pos.y = f32(strconv.atof(js.get_element_value_string("pos-y", data[:])))
+        g_os.input.pos.y = f32(strconv.atof(js.get_element_value_string("pos-y", data[:])))
     })
 
     js.add_custom_event_listener("pos-z", "input", nil, proc(e: js.Event) {
         data : [256]byte;
-        state.pos.z = f32(strconv.atof(js.get_element_value_string("pos-z", data[:])))
+        g_os.input.pos.z = f32(strconv.atof(js.get_element_value_string("pos-z", data[:])))
     })
 
     js.add_custom_event_listener("cam-x", "input", nil, proc(e: js.Event) {
         data : [256]byte;
-        state.cam_pos.x = f32(strconv.atof(js.get_element_value_string("cam-x", data[:])))
+        g_os.input.cam_pos.x = f32(strconv.atof(js.get_element_value_string("cam-x", data[:])))
     })
 
     js.add_custom_event_listener("cam-y", "input", nil, proc(e: js.Event) {
         data : [256]byte;
-        state.cam_pos.y = f32(strconv.atof(js.get_element_value_string("cam-y", data[:])))
+        g_os.input.cam_pos.y = f32(strconv.atof(js.get_element_value_string("cam-y", data[:])))
     })
 
     js.add_custom_event_listener("cam-z", "input", nil, proc(e: js.Event) {
         data : [256]byte;
-        state.cam_pos.z = f32(strconv.atof(js.get_element_value_string("cam-z", data[:])))
+        g_os.input.cam_pos.z = f32(strconv.atof(js.get_element_value_string("cam-z", data[:])))
     })
 
 
@@ -126,19 +124,19 @@ size_callback :: proc(e: js.Event) {
 
 start_callback :: proc(e: js.Event) {
     // fmt.println("Clicked!", e)
-    state.clicked += 0.1
-    state.clicked = clamp(state.clicked, 0, 1)
-    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.clicked))
+    g_os.input.clicked += 0.1
+    g_os.input.clicked = clamp(g_os.input.clicked, 0, 1)
+    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", g_os.input.clicked))
 }
 
 stop_callback :: proc(e: js.Event) {
-    state.clicked = 0
-    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", state.clicked))
+    g_os.input.clicked = 0
+    js_ext.set_element_text_string("start", fmt.aprintf("Increment: %.2f", g_os.input.clicked))
 }
 
 @(export)
 malloc :: proc "contextless" (size: int, ptrToAlocatedPtr: ^rawptr) {
-    context = state.ctx
+    context = ctx
 	assert(size_of(rawptr) == size_of(u32), "rawptr is not the same size as u32")
 	data, ok := runtime.mem_alloc_bytes(size)
 	ptrToAlocatedPtr^ = raw_data(data)

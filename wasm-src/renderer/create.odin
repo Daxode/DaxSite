@@ -123,7 +123,7 @@ createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert,
     return result;
 }
 
-createMesh :: proc(device: wgpu.Device, verts: []Vertex, indices: []u32, material: ^MaterialTemplate($TVert, $TUniform)) -> Mesh(TVert, TUniform) {
+createMesh :: proc(device: wgpu.Device, verts: []Vertex, indices: []u32, material: ^RenderInstance($TVert, $TUniform)) -> Mesh(TVert, TUniform) {
     result := Mesh(TVert, TUniform){};
 
     result.vertBuffer = wgpu.DeviceCreateBuffer(device, &{

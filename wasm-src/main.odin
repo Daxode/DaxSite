@@ -13,36 +13,33 @@ import gltf2 "glTF2"
 
 DefaultMesh :: renderer.Mesh(renderer.Vertex, renderer.UniformData);
 DefaultMeshGroup :: renderer.MeshGroup(renderer.Vertex, renderer.UniformData);
-DefaultMaterial :: renderer.MaterialTemplate(renderer.Vertex, renderer.UniformData);
+DefaultMaterial :: renderer.RenderInstance(renderer.Vertex, renderer.UniformData);
 
 State :: struct {
+    // runtime state
     ctx: runtime.Context,
     os:  OS,
-    
-    clicked: f64,
-    clickedSmoothed: f64,
-    touchHeld: bool,
-
-    timer: f64,
-
-    pos: [3]f32,
-    cam_pos: [3]f32,
-    
-    // duck_data_load: ^js_ext.fetch_promise_raw,
-
     render_manager:        renderer.RenderManagerState,
-}
 
-//@(private="file")
+    // game state
+    timer: f64,
+    clickedSmoothed: f64,
+    // duck_data_load: ^js_ext.fetch_promise_raw,
+}
+@(private="file")
 state: State
+
+InputState :: struct {
+    clicked: f64,
+    pos: linalg.Vector3f32,
+    cam_pos: linalg.Vector3f32,
+}
 
 main :: proc() {
     state.ctx = context
     using state;
 
     os_init(&state.os)
-
-    // state.duck_data_load = js_ext.fetch("https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/Duck/glTF-Binary/Duck.glb")
 
     render_manager.instance = wgpu.CreateInstance(nil)
     if render_manager.instance == nil {
@@ -94,7 +91,7 @@ main :: proc() {
         render_manager.materialToMeshes = make(map[^DefaultMaterial]DefaultMeshGroup)
 
         // Load meshes and materials
-        append(&render_manager.material, renderer.createDefaultMaterialTemplate(render_manager.device));
+        append(&render_manager.material, DefaultMaterial {renderer.createDefaultMaterialTemplate(render_manager.device), {}});
 
         // Load model
         importer_model.load_model(#load("../resources/models/duck.glb"), &state.render_manager)
@@ -119,9 +116,8 @@ main :: proc() {
                 mappedAtCreation = false
             });
             
-            texture, texture_ok := material.texture.?
-            assert(texture_ok, "Material does not have a texture")
-            texture_view := wgpu.TextureCreateView(texture.texture, &wgpu.TextureViewDescriptor{
+            assert(len(material.textures)>0, "Material does not have a texture")
+            texture_view := wgpu.TextureCreateView(material.textures[0].texture, &wgpu.TextureViewDescriptor{
                 label = "Material Texture View",
                 format = .RGBA8Unorm,
                 dimension = ._2D,
@@ -145,7 +141,7 @@ main :: proc() {
             };
             group.bindGroup = wgpu.DeviceCreateBindGroup(render_manager.device, &wgpu.BindGroupDescriptor{
                 label = "Default Material Bind Group",
-                layout = material.bindGroupLayout,
+                layout = material.materialTemplate.bindGroupLayout,
                 entries = transmute([^]wgpu.BindGroupEntry)&group_entries,
                 entryCount = len(group_entries),
             });
@@ -166,59 +162,15 @@ ceil_to_next_multiple :: proc(value, multiple: u32) -> u32 {
     return (value + multiple - 1) / multiple * multiple
 }
 
-
 resize :: proc "c" () {
     context = state.ctx
-    using state
-
-    render_manager.config.width, render_manager.config.height = os_get_render_bounds(&state.os)
-    wgpu.SurfaceConfigure(render_manager.surface, &render_manager.config)
-    if render_manager.depthTexture != nil {
-        // Destroy the old depth texture
-        wgpu.TextureViewRelease(render_manager.depthView)
-        wgpu.TextureDestroy(render_manager.depthTexture)
-        wgpu.TextureRelease(render_manager.depthTexture)
-    }
-    
-    // Create Depth Texture
-    depthFormat := wgpu.TextureFormat.Depth24Plus
-    render_manager.depthTexture = wgpu.DeviceCreateTexture(render_manager.device, &wgpu.TextureDescriptor{
-        label = "Depth Texture",
-        size = {render_manager.config.width, render_manager.config.height, 1},
-        mipLevelCount = 1,
-        sampleCount = 1,
-        dimension = ._2D,
-        format = .Depth24Plus,
-        usage = {.RenderAttachment},
-        viewFormatCount = 1,
-        viewFormats = &depthFormat,
-    });
-    render_manager.depthView = wgpu.TextureCreateView(render_manager.depthTexture, &wgpu.TextureViewDescriptor{
-        label = "Depth Texture View",
-        format = .Depth24Plus,
-        dimension = ._2D,
-        aspect = .DepthOnly,
-        baseMipLevel = 0,
-        mipLevelCount = 1,
-        baseArrayLayer = 0,
-        arrayLayerCount = 1,
-    });
+    state.render_manager.config.width, state.render_manager.config.height = os_get_render_bounds(&state.os)
+    renderer.resize_screen(&state.render_manager)
 }
 
-trigger_once: b8
 frame :: proc "c" (dt: f32) {
     context = state.ctx
     using state
-    
-    // if state.duck_data_load.is_done == 1 {
-    //     if !trigger_once {
-    //         trigger_once = true
-    //         duck_data := state.duck_data_load.buffer[:state.duck_data_load.buffer_length]
-    //         fmt.println("Duck data is done", len(duck_data))
-    //     }
-    // } else {
-    //     fmt.println("Duck data is not done")
-    // }
     
     surface_texture := wgpu.SurfaceGetCurrentTexture(render_manager.surface)
     switch surface_texture.status {
@@ -245,7 +197,7 @@ frame :: proc "c" (dt: f32) {
 
     from := wgpu.Color{0.05, 0.05, 0.1, 1.}
     to := wgpu.Color{0.6, 0.2, 0.7, 1.}
-    state.clickedSmoothed = math.lerp(state.clickedSmoothed, state.clicked, f64(2*dt))
+    state.clickedSmoothed = math.lerp(state.clickedSmoothed, state.os.input.clicked, f64(2*dt))
 
     render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
     command_encoder, &{
@@ -304,7 +256,7 @@ frame :: proc "c" (dt: f32) {
         for &mesh, i in meshGroup.meshes {
             projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(render_manager.config.width)/f32(render_manager.config.height), 0.00001, 1000, false)
             view := linalg.matrix4_look_at(linalg.Vector3f32{
-                state.cam_pos.x, state.cam_pos.y, state.cam_pos.z
+                state.os.input.cam_pos.x, state.os.input.cam_pos.y, state.os.input.cam_pos.z
                 // 0, 0, 0
             }, linalg.Vector3f32{
                 // state.cam_pos.x, state.cam_pos.y, state.cam_pos.z,
@@ -316,7 +268,7 @@ frame :: proc "c" (dt: f32) {
             })
 
             // fmt.println("Drawing mesh", mesh, "with material", mesh.material)
-            wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, material.pipeline)
+            wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, material.materialTemplate.pipeline)
             wgpu.RenderPassEncoderSetBindGroup(render_pass_encoder, 0, meshGroup.bindGroup, []u32{u32(i)*meshGroup.uniformStride});
             wgpu.RenderPassEncoderSetVertexBuffer(render_pass_encoder, 0, mesh.vertBuffer, 0, u64(len(mesh.vertices)*size_of(renderer.Vertex)))
             wgpu.RenderPassEncoderSetIndexBuffer(render_pass_encoder, mesh.indexBuffer, wgpu.IndexFormat.Uint32, 0, u64(len(mesh.indices)*size_of(u32)))
@@ -324,7 +276,7 @@ frame :: proc "c" (dt: f32) {
             wgpu.QueueWriteBuffer(render_manager.queue, meshGroup.uniformBuffer, u64(u32(i)*meshGroup.uniformStride), &renderer.UniformData{
                 f32(state.clickedSmoothed),
                 projection * view * linalg.matrix4_from_trs(
-                    linalg.Vector3f32{state.pos.x, state.pos.y, state.pos.z},
+                    linalg.Vector3f32{state.os.input.pos.x, state.os.input.pos.y, state.os.input.pos.z},
                     linalg.quaternion_from_euler_angle_y(f32(state.timer)), //
                     linalg.Vector3f32(1)
                 ),
@@ -349,7 +301,7 @@ finish :: proc() {
         renderer.releaseMesh(&mesh)
     }
     for &material in render_manager.material {
-        renderer.releaseMaterialTemplate(&material)
+        renderer.releaseMaterialTemplate(&material.materialTemplate)
     }
     wgpu.QueueRelease(render_manager.queue)
     wgpu.DeviceRelease(render_manager.device)

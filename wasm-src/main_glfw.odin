@@ -10,6 +10,7 @@ import "core:fmt"
 
 OS :: struct {
 	window: glfw.WindowHandle,
+    input: InputState,
 }
 
 os_init :: proc(os: ^OS) {
@@ -38,48 +39,48 @@ os_run :: proc(os: ^OS) {
 
         // arrow keys change the camera position
         if glfw.GetKey(os.window, glfw.KEY_UP) == glfw.PRESS {
-            state.pos.y += 0.1
+            os.input.pos.y += 0.1
         }
         if glfw.GetKey(os.window, glfw.KEY_DOWN) == glfw.PRESS {
-            state.pos.y -= 0.1
+            os.input.pos.y -= 0.1
         }
         if glfw.GetKey(os.window, glfw.KEY_LEFT) == glfw.PRESS {
-            state.pos.x -= 0.1
+            os.input.pos.x += 0.1
         }
         if glfw.GetKey(os.window, glfw.KEY_RIGHT) == glfw.PRESS {
-            state.pos.x += 0.1
+            os.input.pos.x -= 0.1
         }
         
         // wasd keys change the camera target
         if glfw.GetKey(os.window, glfw.KEY_W) == glfw.PRESS {
-            state.cam_pos.y += 0.1
+            os.input.cam_pos.y -= 0.1
         }
         if glfw.GetKey(os.window, glfw.KEY_S) == glfw.PRESS {
-            state.cam_pos.y -= 0.1
+            os.input.cam_pos.y += 0.1
         }
         if glfw.GetKey(os.window, glfw.KEY_A) == glfw.PRESS {
-            state.cam_pos.x -= 0.1
+            os.input.cam_pos.x -= 0.1
         }
         if glfw.GetKey(os.window, glfw.KEY_D) == glfw.PRESS {
-            state.cam_pos.x += 0.1
+            os.input.cam_pos.x += 0.1
         }
 
         // q and e keys change the camera target z
         if glfw.GetKey(os.window, glfw.KEY_Q) == glfw.PRESS {
-            state.cam_pos.z += 0.1
+            os.input.cam_pos.z += 0.1
         }
         if glfw.GetKey(os.window, glfw.KEY_E) == glfw.PRESS {
-            state.cam_pos.z -= 0.1
+            os.input.cam_pos.z -= 0.1
         }
 
         // r and f keys change the clicked value
         if glfw.GetKey(os.window, glfw.KEY_R) == glfw.PRESS {
-            state.clicked += 0.1
-            state.clicked = clamp(state.clicked, 0, 1)
+            os.input.clicked += 0.1
+            os.input.clicked = clamp(os.input.clicked, 0, 1)
         }
         if glfw.GetKey(os.window, glfw.KEY_F) == glfw.PRESS {
-            state.clicked -= 0.1
-            state.clicked = clamp(state.clicked, 0, 1)
+            os.input.clicked -= 0.1
+            os.input.clicked = clamp(os.input.clicked, 0, 1)
         }
 
 		frame(dt)
