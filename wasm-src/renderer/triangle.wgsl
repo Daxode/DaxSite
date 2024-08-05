@@ -18,7 +18,7 @@ fn vs_main(in: VertexInput) -> VertexOutput
 {
     var out: VertexOutput;
     let fullTransform = uniformData.objectTransform;
-    let val = mix(vec3f(in.uv, 0), in.worldPos*0.01, uniformData.time);
+    let val = mix(vec3f(in.uv, 0), in.worldPos, uniformData.time);
 
     out.clip_pos = vec4<f32>((fullTransform*vec4f(val, 1)).xyz, 1.0);
     out.clip_pos.z = out.clip_pos.z * 0.5 + 0.5;

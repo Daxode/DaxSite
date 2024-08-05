@@ -11,10 +11,6 @@ import "core:math/linalg"
 import "importer_model"
 import gltf2 "glTF2"
 
-DefaultMesh :: renderer.Mesh(renderer.Vertex, renderer.UniformData);
-DefaultMeshGroup :: renderer.MeshGroup(renderer.Vertex, renderer.UniformData);
-DefaultMaterial :: renderer.RenderInstance(renderer.Vertex, renderer.UniformData);
-
 State :: struct {
     // runtime state
     ctx: runtime.Context,
@@ -86,26 +82,40 @@ main :: proc() {
         render_manager.queue = wgpu.DeviceGetQueue(render_manager.device)
 
         // Setup mesh and material arrays
-        render_manager.meshes = make([dynamic]DefaultMesh)
-        render_manager.material = make([dynamic]DefaultMaterial)
-        render_manager.materialToMeshes = make(map[^DefaultMaterial]DefaultMeshGroup)
-
-        // Load meshes and materials
-        append(&render_manager.material, DefaultMaterial {renderer.createDefaultMaterialTemplate(render_manager.device), {}});
+        set := renderer.CreateRenderSet(&state.render_manager, renderer.Vertex, renderer.UniformData)
 
         // Load model
-        importer_model.load_model(#load("../resources/models/duck.glb"), &state.render_manager)
+        loaded_model := importer_model.load_model(#load("../resources/models/duck.glb"), set)
+        for importModelResult in loaded_model {
+            // Create mesh instance
+            append(&set.meshInstances, renderer.MeshInstance(renderer.Vertex, renderer.UniformData) {
+                importModelResult.meshTemplate,
+                importModelResult.renderInstance,
+                linalg.matrix4_scale_f32(0.01),
+            })
 
-        // Group meshes by material
-        for &mesh in render_manager.meshes {
-            if !(mesh.material in render_manager.materialToMeshes) {
-                render_manager.materialToMeshes[mesh.material] = {make([dynamic]^DefaultMesh), nil, nil, 0}
+            // create 20 more instances
+            for i in 0..<20 {
+                append(&set.meshInstances, renderer.MeshInstance(renderer.Vertex, renderer.UniformData) {
+                    importModelResult.meshTemplate,
+                    importModelResult.renderInstance,
+                    linalg.matrix4_translate_f32({-1, f32(i), 0}) * linalg.matrix4_scale_f32(0.01),
+                })
             }
-            group := &render_manager.materialToMeshes[mesh.material];
-            append(&group.meshes, &mesh);
         }
 
-        for material, &group in render_manager.materialToMeshes {
+        // Group meshes by material
+        for &meshInstance, meshInstanceIndex in set.meshInstances {
+            materialTemplateIndex := meshInstance.renderInstanceIndex
+            if !(materialTemplateIndex in set.materialToMeshes) {
+                set.materialToMeshes[materialTemplateIndex] = {}
+            }
+            group := &set.materialToMeshes[materialTemplateIndex];
+            append(&group.meshes, renderer.MeshInstanceIndex(meshInstanceIndex));
+        }
+
+        for material_index, &group in set.materialToMeshes {
+            material := set.renderInstances[material_index]
             fmt.println("Creating bind group for material", material)
             fmt.println("Group has", len(group.meshes), "meshes")
             group.uniformStride = ceil_to_next_multiple(size_of(renderer.UniformData), limits.limits.minUniformBufferOffsetAlignment)
@@ -116,18 +126,7 @@ main :: proc() {
                 mappedAtCreation = false
             });
             
-            assert(len(material.textures)>0, "Material does not have a texture")
-            texture_view := wgpu.TextureCreateView(material.textures[0].texture, &wgpu.TextureViewDescriptor{
-                label = "Material Texture View",
-                format = .RGBA8Unorm,
-                dimension = ._2D,
-                aspect = .All,
-                baseMipLevel = 0,
-                mipLevelCount = 1,
-                baseArrayLayer = 0,
-                arrayLayerCount = 1,
-            });
-
+            assert(material.textures[0]!=-1, "Material does not have a texture")
             group_entries := [?]wgpu.BindGroupEntry{
                 {
                     binding = 0,
@@ -136,7 +135,7 @@ main :: proc() {
                 },
                 {
                     binding = 1,
-                    textureView = texture_view
+                    textureView = set.textures[material.textures[0]].view,
                 }
             };
             group.bindGroup = wgpu.DeviceCreateBindGroup(render_manager.device, &wgpu.BindGroupDescriptor{
@@ -171,141 +170,54 @@ resize :: proc "c" () {
 frame :: proc "c" (dt: f32) {
     context = state.ctx
     using state
-    
-    surface_texture := wgpu.SurfaceGetCurrentTexture(render_manager.surface)
-    switch surface_texture.status {
-        case .Success:
-            // All good, could check for `surface_texture.suboptimal` here.
-            case .Timeout, .Outdated, .Lost:
-                // Skip this frame, and re-configure surface.
-            if surface_texture.texture != nil {
-                wgpu.TextureRelease(surface_texture.texture)
-            }
-            resize()
+
+    // Game Logic
+    // ...
+
+    // Draw Frame
+    {
+        // Create a new frame command buffer
+        command_buffer, ok := renderer.StartFrameCommandBuffer(&state.render_manager, resize)
+        defer renderer.EndFrameCommandBuffer(&state.render_manager, &command_buffer)
+        if !ok {
             return
-        case .OutOfMemory, .DeviceLost:
-            // Fatal error
-            fmt.panicf("[triangle] get_current_texture status=%v", surface_texture.status)
-    }
-    defer wgpu.TextureRelease(surface_texture.texture)
-
-    frame := wgpu.TextureCreateView(surface_texture.texture, nil)
-    defer wgpu.TextureViewRelease(frame)
-
-    command_encoder := wgpu.DeviceCreateCommandEncoder(render_manager.device, nil)
-    defer wgpu.CommandEncoderRelease(command_encoder)
-
-    from := wgpu.Color{0.05, 0.05, 0.1, 1.}
-    to := wgpu.Color{0.6, 0.2, 0.7, 1.}
-    state.clickedSmoothed = math.lerp(state.clickedSmoothed, state.os.input.clicked, f64(2*dt))
-
-    render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
-    command_encoder, &{
-        colorAttachmentCount = 1,
-        colorAttachments     = &wgpu.RenderPassColorAttachment{
-            view       = frame,
-            loadOp     = .Clear,
-            storeOp    = .Store,
-            clearValue = math.lerp(wgpu.Color(state.clickedSmoothed), from, to),
-        },
-        depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
-            view = render_manager.depthView,
-            
-            depthClearValue = 1.0,
-            depthLoadOp = .Clear,
-            depthStoreOp = .Store,
-            depthReadOnly = false,
-
-            stencilClearValue = 0,
-            stencilLoadOp = {},
-            stencilStoreOp = {},
-            stencilReadOnly = true,
         }
-    },
-    )
-    defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
-    wgpu.RenderPassEncoderEnd(render_pass_encoder)
-
-
-    for material, meshGroup in render_manager.materialToMeshes {
-        render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
-        command_encoder, &{
-            colorAttachmentCount = 1,
-            colorAttachments     = &wgpu.RenderPassColorAttachment{
-                view       = frame,
-                loadOp     = .Load,
-                storeOp    = .Store,
-                clearValue = wgpu.Color{0.0, 0.0, 0.0, 1.0},
-            },
-            depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment{
-                view = render_manager.depthView,
-                
-                depthClearValue = 1.0,
-                depthLoadOp = .Clear,
-                depthStoreOp = .Store,
-                depthReadOnly = false,
     
-                stencilClearValue = 0,
-                stencilLoadOp = {},
-                stencilStoreOp = {},
-                stencilReadOnly = true,
-            }
+        // Clear the screen
+        from := wgpu.Color{0.05, 0.05, 0.1, 1.}
+        to := wgpu.Color{0.6, 0.2, 0.7, 1.}
+        state.clickedSmoothed = math.lerp(state.clickedSmoothed, state.os.input.clicked, f64(2*dt))
+        renderer.CommandBufferEncodeRenderPassSolidColor(&state.render_manager, &command_buffer, math.lerp(wgpu.Color(state.clickedSmoothed), from, to))
+    
+        // Draw meshes
+        projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(render_manager.config.width)/f32(render_manager.config.height), 0.00001, 1000, false)
+        view := linalg.matrix4_look_at(linalg.Vector3f32{
+            state.os.input.cam_pos.x, state.os.input.cam_pos.y, state.os.input.cam_pos.z
+            // 0, 0, 0
+        }, linalg.Vector3f32{
+            // state.cam_pos.x, state.cam_pos.y, state.cam_pos.z,
+            math.cos(f32(0.25)*6.28)*20,
+            0,
+            math.sin(f32(0.25)*6.28)*20
+        }, linalg.Vector3f32{
+            0.0, 1.0, 0.0
         })
-        defer wgpu.RenderPassEncoderRelease(render_pass_encoder)
-
-        for &mesh, i in meshGroup.meshes {
-            projection := linalg.matrix4_perspective((90.0/360.0)*6.28318530718, f32(render_manager.config.width)/f32(render_manager.config.height), 0.00001, 1000, false)
-            view := linalg.matrix4_look_at(linalg.Vector3f32{
-                state.os.input.cam_pos.x, state.os.input.cam_pos.y, state.os.input.cam_pos.z
-                // 0, 0, 0
-            }, linalg.Vector3f32{
-                // state.cam_pos.x, state.cam_pos.y, state.cam_pos.z,
-                math.cos(f32(0.25)*6.28)*20,
-                0,
-                math.sin(f32(0.25)*6.28)*20
-            }, linalg.Vector3f32{
-                0.0, 1.0, 0.0
-            })
-
-            // fmt.println("Drawing mesh", mesh, "with material", mesh.material)
-            wgpu.RenderPassEncoderSetPipeline(render_pass_encoder, material.materialTemplate.pipeline)
-            wgpu.RenderPassEncoderSetBindGroup(render_pass_encoder, 0, meshGroup.bindGroup, []u32{u32(i)*meshGroup.uniformStride});
-            wgpu.RenderPassEncoderSetVertexBuffer(render_pass_encoder, 0, mesh.vertBuffer, 0, u64(len(mesh.vertices)*size_of(renderer.Vertex)))
-            wgpu.RenderPassEncoderSetIndexBuffer(render_pass_encoder, mesh.indexBuffer, wgpu.IndexFormat.Uint32, 0, u64(len(mesh.indices)*size_of(u32)))
-            wgpu.RenderPassEncoderDrawIndexed(render_pass_encoder, u32(len(mesh.indices)), 1, 0, 0, 0)
-            wgpu.QueueWriteBuffer(render_manager.queue, meshGroup.uniformBuffer, u64(u32(i)*meshGroup.uniformStride), &renderer.UniformData{
-                f32(state.clickedSmoothed),
-                projection * view * linalg.matrix4_from_trs(
-                    linalg.Vector3f32{state.os.input.pos.x, state.os.input.pos.y, state.os.input.pos.z},
-                    linalg.quaternion_from_euler_angle_y(f32(state.timer)), //
-                    linalg.Vector3f32(1)
-                ),
-            }, size_of(renderer.UniformData))
+        viewProjection := projection * view
+        for &set in state.render_manager.rendererSet {
+            set.meshInstances[0].transform = linalg.matrix4_from_trs(
+                linalg.Vector3f32{state.os.input.pos.x, state.os.input.pos.y, state.os.input.pos.z},
+                linalg.quaternion_from_euler_angle_y(f32(state.timer)),
+                linalg.Vector3f32(1)
+            )
+            renderer.DrawMeshes(&set, &command_buffer, viewProjection, f32(state.clickedSmoothed))
         }
-        wgpu.RenderPassEncoderEnd(render_pass_encoder)
     }
-    // fmt.println("Finished drawing meshes")
+
     state.timer += f64(dt)
-
-
-    command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
-    defer wgpu.CommandBufferRelease(command_buffer)
-    wgpu.QueueSubmit(render_manager.queue, { command_buffer })
-    wgpu.SurfacePresent(render_manager.surface)
 }
 
 
 finish :: proc() {
     using state
-    for &mesh in render_manager.meshes {
-        renderer.releaseMesh(&mesh)
-    }
-    for &material in render_manager.material {
-        renderer.releaseMaterialTemplate(&material.materialTemplate)
-    }
-    wgpu.QueueRelease(render_manager.queue)
-    wgpu.DeviceRelease(render_manager.device)
-    wgpu.AdapterRelease(render_manager.adapter)
-    wgpu.SurfaceRelease(render_manager.surface)
-    wgpu.InstanceRelease(render_manager.instance)
+    renderer.ReleaseRenderManager(&state.render_manager)
 }

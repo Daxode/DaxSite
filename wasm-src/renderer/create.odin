@@ -5,11 +5,14 @@ import "core:strings"
 import "core:fmt"
 import rt "base:runtime"
 
+
+// Todo: replace with a addRenderInstance function that returns a MaterialTemplateIndex
 createDefaultMaterialTemplate :: proc(device: wgpu.Device) -> MaterialTemplate(Vertex, UniformData) {
     shader :: #load("triangle.wgsl");
     return createMaterialTemplate(device, strings.unsafe_string_to_cstring(strings.clone_from_bytes(shader)), Vertex, UniformData);
 }
 
+// Todo: replace with a addMaterialTemplate function that returns a MaterialTemplateIndex
 createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert, $TUniform: typeid) -> MaterialTemplate(TVert, TUniform) {
     result := MaterialTemplate(TVert, TUniform){};
     result.shader = wgpu.DeviceCreateShaderModule(device, &{
@@ -123,8 +126,9 @@ createMaterialTemplate :: proc(device: wgpu.Device, shaderCode: cstring, $TVert,
     return result;
 }
 
-createMesh :: proc(device: wgpu.Device, verts: []Vertex, indices: []u32, material: ^RenderInstance($TVert, $TUniform)) -> Mesh(TVert, TUniform) {
-    result := Mesh(TVert, TUniform){};
+// Todo: replace with a addMeshTemplate function that returns an index
+createMeshTemplate :: proc(device: wgpu.Device, verts: []Vertex, indices: []u32, $TVert, $TUniform: typeid) -> MeshTemplate(TVert, TUniform) {
+    result := MeshTemplate(TVert, TUniform){};
 
     result.vertBuffer = wgpu.DeviceCreateBuffer(device, &{
         label            = "Vertex Buffer",
@@ -146,20 +150,23 @@ createMesh :: proc(device: wgpu.Device, verts: []Vertex, indices: []u32, materia
     copy(destIndices, indices)
     wgpu.BufferUnmap(result.indexBuffer)
 
-    result.material = material;
     result.vertices = verts;
     result.indices = indices;
 
     return result;
 }
 
-releaseMesh :: proc(mesh: ^Mesh($TVert, $TUniform)) {
-    wgpu.BufferRelease(mesh.vertBuffer);
-    wgpu.BufferRelease(mesh.indexBuffer);
+ReleaseMeshTemplate :: proc(set: ^RendererSet($TVert, $TUniformData), meshTemplateIndex: MeshTemplateIndex) {
+    meshTemplate := set.meshTemplates[meshTemplateIndex];
+    wgpu.BufferRelease(meshTemplate.vertBuffer);
+    wgpu.BufferRelease(meshTemplate.indexBuffer);
+    // should probably create a meshTemplateFreeList
 }
 
-releaseMaterialTemplate :: proc(material: ^MaterialTemplate($TVert, $TUniform)) {
-    wgpu.ShaderModuleRelease(material.shader);
-    wgpu.RenderPipelineRelease(material.pipeline);
-    wgpu.BindGroupLayoutRelease(material.bindGroupLayout);
+ReleaseRenderInstance :: proc(set: ^RendererSet($TVert, $TUniformData), renderInstanceIndex: RenderInstanceIndex) {
+    renderInstance := set.renderInstances[renderInstanceIndex];
+    wgpu.ShaderModuleRelease(renderInstance.materialTemplate.shader);
+    wgpu.RenderPipelineRelease(renderInstance.materialTemplate.pipeline);
+    wgpu.BindGroupLayoutRelease(renderInstance.materialTemplate.bindGroupLayout);
+    // should probably create a materialTemplateFreeList
 }

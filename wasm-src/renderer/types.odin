@@ -3,11 +3,17 @@ package renderer;
 import "vendor:wgpu"
 import "core:math/linalg"
 
+// Template for a material
 MaterialTemplate :: struct($TVert, $TUniform: typeid) {
     shader: wgpu.ShaderModule,
     pipeline: wgpu.RenderPipeline,
     bindGroupLayout: wgpu.BindGroupLayout,
-    texture: Maybe(Texture),
+}
+
+// Instance of a material
+RenderInstance :: struct($TVert: typeid, $TUniform: typeid) {
+    materialTemplate: MaterialTemplate(TVert, TUniform),
+    textures: [4]TextureIndex,
 }
 
 Vertex :: struct {
@@ -21,33 +27,50 @@ UniformData :: struct #align(16) {
     objectTransform: linalg.Matrix4x4f32,
 }
 
-Mesh :: struct($TVert: typeid, $TUniform: typeid) {
+// Template for a mesh
+MeshTemplate :: struct($TVert: typeid, $TUniform: typeid) {
     vertices: []TVert,
     indices: []u32,
     vertBuffer: wgpu.Buffer,
     indexBuffer: wgpu.Buffer,
-    
-    material: ^RenderInstance(TVert, TUniform),
 }
 
-RenderInstance :: struct($TVert: typeid, $TUniform: typeid) {
-    materialTemplate: MaterialTemplate(TVert, TUniform),
-    textures: [4]Texture,
+// Instance of a mesh
+MeshInstance :: struct($TVert: typeid, $TUniform: typeid) {
+    mesh: MeshTemplateIndex,
+    renderInstanceIndex: RenderInstanceIndex,
+    transform: linalg.Matrix4x4f32,
 }
 
+// MeshGroup is a collection of meshes instances that share the same material
 MeshGroup :: struct($TVert: typeid, $TUniform: typeid) {
-    meshes: [dynamic]^Mesh(TVert, TUniform),
+    meshes: [dynamic]MeshInstanceIndex,
     bindGroup: wgpu.BindGroup,
     uniformBuffer: wgpu.Buffer,
     uniformStride: u32,
 }
 
-RendererSet :: struct($TVert: typeid, $TUniform: typeid) {
-    meshes:          [dynamic]Mesh(TVert, TUniform),
-    material:        [dynamic]RenderInstance(TVert, TUniform),
-    materialToMeshes: map[^RenderInstance(TVert, TUniform)]MeshGroup(TVert, TUniform),
+// Texture
+Texture :: struct {
+    texture: wgpu.Texture,
+    view: wgpu.TextureView,
+    sampler: wgpu.Sampler,
 }
 
+TextureIndex :: distinct i16
+MeshInstanceIndex :: distinct u32
+MeshTemplateIndex :: distinct u16
+RenderInstanceIndex :: distinct u16
+
+// RendererSet is a collection of meshes and materials that can be rendered together
+RendererSet :: struct($TVert: typeid, $TUniform: typeid) {
+    textures:           [dynamic]Texture,
+    meshInstances:      [dynamic]MeshInstance(TVert, TUniform),
+    meshTemplates:      [dynamic]MeshTemplate(TVert, TUniform),
+    renderInstances:    [dynamic]RenderInstance(TVert, TUniform),
+    materialToMeshes:   map[RenderInstanceIndex]MeshGroup(TVert, TUniform),
+    owningState:        ^RenderManagerState,
+}
 
 RenderManagerState :: struct {
     // WebGPU
@@ -63,12 +86,11 @@ RenderManagerState :: struct {
     depthView:       wgpu.TextureView,
     
     // Meshes and materials
-    using rendererSet : RendererSet(Vertex, UniformData), // Later render sets can be merged 
+    rendererSet : [dynamic]RendererSet(Vertex, UniformData), // Later render sets can be merged 
 }
 
-
-Texture :: struct {
-    texture: wgpu.Texture,
-    view: wgpu.TextureView,
-    sampler: wgpu.Sampler,
+CommandBuffer :: struct {
+    encoder: wgpu.CommandEncoder,
+    surfaceTexture: wgpu.SurfaceTexture,
+    frame: wgpu.TextureView,
 }
