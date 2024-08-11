@@ -10,16 +10,25 @@ import "renderer"
 import "core:math/linalg"
 import "importer_model"
 import gltf2 "glTF2"
+import "vendor:microui"
 
 State :: struct {
     // runtime state
     ctx: runtime.Context,
     os:  OS,
     render_manager:        renderer.RenderManagerState,
+    
+    uiRender: renderer.DrawInfo,
+    uiCtx: microui.Context,
 
     // game state
     timer: f64,
     clickedSmoothed: f64,
+    sliderValue: f32,
+    color: [4]f32,
+    textbox: [256]u8,
+    textboxLength: int,
+
     // duck_data_load: ^js_ext.fetch_promise_raw,
 }
 @(private="file")
@@ -35,7 +44,8 @@ main :: proc() {
     state.ctx = context
     using state;
 
-    os_init(&state.os)
+    os_init(&state.os, &state.ctx)
+    impl_microui(&state.os, &state.uiCtx)
 
     render_manager.instance = wgpu.CreateInstance(nil)
     if render_manager.instance == nil {
@@ -114,6 +124,7 @@ main :: proc() {
             append(&group.meshes, renderer.MeshInstanceIndex(meshInstanceIndex));
         }
 
+        // Create bind groups
         for material_index, &group in set.materialToMeshes {
             material := set.renderInstances[material_index]
             fmt.println("Creating bind group for material", material)
@@ -153,6 +164,12 @@ main :: proc() {
             }
         }
 
+        // Implement the ui render
+        state.uiRender.materialTemplate = renderer.createUIMaterialTemplate(state.render_manager.device)
+        state.uiRender.meshTemplate = renderer.createUIMeshTemplate(state.render_manager.device)
+        state.uiCtx.text_width = renderer.ui_text_width
+        state.uiCtx.text_height = renderer.ui_text_height
+
         os_run(&state.os)
     }
 }
@@ -173,6 +190,61 @@ frame :: proc "c" (dt: f32) {
 
     // Game Logic
     // ...
+    uiCtx.style.footer_height = 10
+    uiCtx.style.indent = 2
+    uiCtx.style.colors[microui.Color_Type.WINDOW_BG] = microui.Color{30, 25, 35, 150}
+    uiCtx.style.colors[microui.Color_Type.TITLE_BG] = microui.Color{5, 0, 10, 100}
+    uiCtx.style.colors[microui.Color_Type.BORDER] = microui.Color{100,100,100,50}
+    uiCtx.style.colors[microui.Color_Type.BUTTON] = microui.Color{100,100,100,80}
+
+    microui.begin(&uiCtx)
+    if microui.window(&uiCtx, "Hello", {0, 0, 512, 512}, {microui.Opt.NO_CLOSE}) {
+        uiCtx.style.colors[microui.Color_Type.TEXT] = microui.Color{255, 0, 255, 255}
+        microui.label(&uiCtx, "Hello, world!")
+        microui.label(&uiCtx, "This is a test.")
+        uiCtx.style.colors[microui.Color_Type.TEXT] = microui.Color{0, 255, 255, 255}
+        microui.layout_row(&uiCtx, {-1})
+        if (.SUBMIT in microui.button(&uiCtx, "Open World Window")) {
+            microui.get_container(&uiCtx, "World").open = true
+        }
+
+        width := uiCtx.text_width(uiCtx.style.font, "Slider:") + 10
+        microui.layout_row(&uiCtx, {width, -1})
+        microui.label(&uiCtx, "Slider:")
+        microui.slider(&uiCtx, &state.sliderValue, 0, 1, fmt_string="Val:%.2f")
+
+        microui.layout_row(&uiCtx, {-1})
+        microui.textbox(&uiCtx, state.textbox[:], &state.textboxLength)
+
+        uiCtx.style.colors[microui.Color_Type.TEXT] = microui.Color{255, 255, 255, 255}
+        
+        if microui.window(&uiCtx, "World", {0, 0, 512, 512}, {microui.Opt.CLOSED}) {
+            microui.label(&uiCtx, "Hello, world!")
+            microui.label(&uiCtx, "This is a test.")
+
+            sw := i32(f32(microui.get_current_container(&uiCtx).body.w) * 0.14);
+            microui.layout_row(&uiCtx, {18, sw, sw, sw, sw, -1})
+            for i in 0..<1 {
+                microui.label(&uiCtx, fmt.aprint(i));
+                microui.slider(&uiCtx, &state.color.r, 0, 1)
+                microui.slider(&uiCtx, &state.color.g, 0, 1)
+                microui.slider(&uiCtx, &state.color.b, 0, 1)
+                microui.slider(&uiCtx, &state.color.a, 0, 1)
+                microui.draw_rect(&uiCtx, microui.layout_next(&uiCtx), microui.Color{u8(state.color.r*255), u8(state.color.g*255), u8(state.color.b*255), u8(state.color.a*255)})
+            }
+
+            // mu_layout_row(ctx, 6, (int[]) { 80, sw, sw, sw, sw, -1 }, 0);
+            // for (int i = 0; colors[i].label; i++) {
+            //     mu_label(ctx, colors[i].label);
+            //     uint8_slider(ctx, &ctx->style->colors[i].r, 0, 255);
+            //     uint8_slider(ctx, &ctx->style->colors[i].g, 0, 255);
+            //     uint8_slider(ctx, &ctx->style->colors[i].b, 0, 255);
+            //     uint8_slider(ctx, &ctx->style->colors[i].a, 0, 255);
+            //     mu_draw_rect(ctx, mu_layout_next(ctx), ctx->style->colors[i]);
+            // }
+        }
+    }
+    microui.end(&uiCtx)
 
     // Draw Frame
     {
@@ -211,6 +283,11 @@ frame :: proc "c" (dt: f32) {
             )
             renderer.DrawMeshes(&set, &command_buffer, viewProjection, f32(state.clickedSmoothed))
         }
+
+        // Draw UI
+        renderer.DrawUI(
+            state.render_manager.device, state.render_manager.queue, &state.uiRender, 
+            {f32(state.render_manager.config.width), f32(state.render_manager.config.height)}, &state.uiCtx, &command_buffer)
     }
 
     state.timer += f64(dt)
