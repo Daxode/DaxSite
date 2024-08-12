@@ -219,6 +219,8 @@ impl_microui :: proc(os: ^OS, uiCtx: ^microui.Context) {
     })
     js.add_window_event_listener(.Touch_Move, nil, proc(e: js.Event) {
         microui.input_mouse_move(g_os.uiCtx, i32(e.mouse.client.x), i32(e.mouse.client.y))
+        js.event_stop_immediate_propagation()
+        js.event_prevent_default()
     })
 
     js.add_window_event_listener(.Key_Down, nil, proc(e: js.Event) {
